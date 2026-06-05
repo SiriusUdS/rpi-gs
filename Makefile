@@ -1,8 +1,8 @@
 CXX      = g++
 CTT      = aarch64-linux-gnu-g++
-CTTLIBS  = -lncursesw
+CTTLIBS  = --sysroot=$(HOME)/rpi-build/staging -lncursesw -pthread -lgpiodcxx
 CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -Iinc
-LDFLAGS  = -lncurses
+LDFLAGS  = -lncurses -pthread
 
 TARGET      = tui_demo
 TARGET_PROD = sirius
@@ -24,7 +24,7 @@ prod: $(TARGET_PROD)
 
 # Rule for production cross-compilation (builds 'init')
 $(TARGET_PROD): $(SOURCES) inc/tui.h
-	$(CTT) $(CXXFLAGS) -o $@ $(SOURCES) $(CTTLIBS)
+	$(CTT) $(CXXFLAGS) --sysroot=$(HOME)/rpi-build/staging -DUSING_LIBGPIOD -o $@ $(SOURCES) $(CTTLIBS)
 
 clean:
 	rm -f $(TARGET) $(TARGET_PROD)

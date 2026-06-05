@@ -6,8 +6,7 @@
 
 class DevicesPages: public Screen{
     private:
-    FillStation fill;
-    Engine engine;
+    int focused_sub; // 0 = fill, 1 = engine
     public:
 
 
@@ -15,5 +14,6 @@ class DevicesPages: public Screen{
     virtual int  tick_interval_ms() const { return 100; }  // 0 = static screen
     void draw(Panel*p, bool focused);
     virtual bool tick();
+    virtual bool handle_key(int key) override;
     ~DevicesPages();
 };

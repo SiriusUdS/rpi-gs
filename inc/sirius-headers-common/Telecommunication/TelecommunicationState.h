@@ -1,0 +1,8 @@
+#pragma once
+
+#include <stdint.h>
+
+#define TELECOMMUNICATION_STATE_INIT     (uint8_t)0x00
+#define TELECOMMUNICATION_STATE_CONFIG   (uint8_t)0x01
+#define TELECOMMUNICATION_STATE_ACTIVE   (uint8_t)0x02
+#define TELECOMMUNICATION_STATE_INACTIVE (uint8_t)0x03

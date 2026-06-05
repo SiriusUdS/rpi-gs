@@ -1,0 +1,3 @@
+[submodule "sirius-headers-common"]
+	path = inc/sirius-headers-common
+	url = https://github.com/SiriusUdS/sirius-headers-common.git

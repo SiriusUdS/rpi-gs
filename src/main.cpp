@@ -1,6 +1,8 @@
 #include "Welcome.h"
 #include "devices.h"
 #include "Network.h"
+#include "GroundStationScreen.h"
+#include "system.h"
 #include <vector>
 #include <memory>
 #include <chrono>
@@ -35,6 +37,7 @@ int main() {
     std::vector<std::unique_ptr<Screen>> screens;
     screens.push_back(std::make_unique<NetworkPage>());
     screens.push_back(std::make_unique<DevicesPages>());
+    screens.push_back(std::make_unique<GroundStationScreen>());
     screens.push_back(std::make_unique<HandoffScreen>("Shell", "/bin/sh"));
 
     // ── Build nav from screen titles ─────────────────────────────────────────
@@ -87,8 +90,9 @@ int main() {
 
     // Only call tick/timeout on the active Screen object, never on welcome
     auto apply_timeout = [&]() {
-        int ms = has_screen() ? screens[cur_screen]->tick_interval_ms() : 0;
-        wtimeout(left->win(), ms > 0 ? ms : -1);
+        int ms = has_screen() ? screens[cur_screen]->tick_interval_ms() : 100;
+        if (ms <= 0) ms = 100;
+        wtimeout(left->win(), ms);
     };
 
     update_hint();
@@ -100,6 +104,9 @@ int main() {
     int key;
     while ((key = wgetch(left->win())) != ERR || true) {
         bool needs_redraw = false;
+        if (SiriusSystem::getInstance().getGroundStation().tick()) {
+            needs_redraw = true;
+        }
 
         if (key == ERR) {
             // Timeout — only tick if a real screen is active

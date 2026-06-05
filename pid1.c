@@ -51,7 +51,7 @@ int main() {
     //ret = system("/sbin/ip route add default via 192.168.1.1");
     //if (ret != 0) write(2, "WARNING: Failed to set gateway\n", 31);
 
-    write(1, "SIRIUS GS STARTED\n", 26); // Prints on TTY2
+    write(1, "SIRIUS GS STARTED\n", 18); // Prints on TTY2
 
     while (1) {
         pid_t pid = fork();

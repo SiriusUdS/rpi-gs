@@ -1,12 +1,14 @@
 #include "system.h"
 
 SiriusSystem::SiriusSystem()
+    : ground_station(gpio_reader)
 {
+    gpio_reader.start();
 }
 
 const ServerStatus SiriusSystem::getServerStatus()
 {
-    return server.getStatus();
+    return ground_station.getServer().getStatus();
 }
 
 SiriusSystem &SiriusSystem::getInstance()
@@ -19,4 +21,5 @@ SiriusSystem &SiriusSystem::getInstance()
 
 SiriusSystem::~SiriusSystem()
 {
+    gpio_reader.stop();
 }

@@ -3,11 +3,12 @@
 #include <vector>
 #include <mutex>
 #include <cstdint>
+#include <atomic>
+#include <string>
 #include <netinet/in.h> // Required for struct sockaddr_in
 
-
-typedef enum ServerStatus{
-    SERVER_INIT=0,
+enum ServerStatus {
+    SERVER_INIT = 0,
     SERVER_LISTEN,
     SERVER_CONNECTED,
     SERVER_ERROR,
@@ -36,22 +37,28 @@ public:
      */
     bool receive(UdpMessage& out_msg);
 
-
     const ServerStatus getStatus();
 
     /**
      * @brief Attempts to send raw bytes to a specific destination. Non-blocking.
      * @param data The raw bytes to send.
-     * @param dest_addr The destination address.
      * @return true if successful, false otherwise.
      */
-    bool send(const std::vector<uint8_t>& data, const struct sockaddr_in& dest_addr);
+    bool send(const std::vector<uint8_t>& data);
+
+    // Client connection getters
+    bool isClientConnected() const;
+    std::string getConnectedClientIP();
+    uint16_t getConnectedClientPort();
+    void disconnectClient();
 
 private:
     uint16_t port_;
     int socket_fd_;
     std::mutex socket_mutex_; // Ensures thread-safe access to the socket
-    ServerStatus status;
+    std::atomic<ServerStatus> status;
+    std::atomic<bool> has_client_;
+    struct sockaddr_in client_addr_;
 
     void initSocket();
     void closeSocket();

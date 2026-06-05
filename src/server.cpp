@@ -11,7 +11,7 @@
 #include <arpa/inet.h>
 #include "config.h"
 
-UdpServer::UdpServer() : socket_fd_(-1),port_(SERVER_PORT), status(SERVER_INIT) {
+UdpServer::UdpServer() : socket_fd_(-1),port_(SERVER_PORT), status(SERVER_INIT), has_client_(false) {
     initSocket();
 }
 
@@ -28,21 +28,39 @@ bool UdpServer::receive(UdpMessage& out_msg) {
     struct sockaddr_in sender_addr;
     socklen_t sender_len = sizeof(sender_addr);
 
-    ssize_t bytes_received = recvfrom(socket_fd_, buffer, sizeof(buffer), 0,
-                                      (struct sockaddr*)&sender_addr, &sender_len);
+    while (true) {
+        ssize_t bytes_received = recvfrom(socket_fd_, buffer, sizeof(buffer), 0,
+                                          (struct sockaddr*)&sender_addr, &sender_len);
 
-    if (bytes_received > 0) {
-        out_msg.data.assign(buffer, buffer + bytes_received);
-        out_msg.sender_addr = sender_addr;
-        return true;
-    } else if (bytes_received < 0) {
-        // EAGAIN or EWOULDBLOCK means no data is currently available
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            std::cerr << "UDP Receive error: " << strerror(errno) << std::endl;
+        if (bytes_received > 0) {
+            if (!has_client_) {
+                client_addr_ = sender_addr;
+                has_client_ = true;
+                status = SERVER_CONNECTED;
+                out_msg.data.assign(buffer, buffer + bytes_received);
+                out_msg.sender_addr = sender_addr;
+                return true;
+            } else {
+                if (sender_addr.sin_addr.s_addr == client_addr_.sin_addr.s_addr &&
+                    sender_addr.sin_port == client_addr_.sin_port) {
+                    out_msg.data.assign(buffer, buffer + bytes_received);
+                    out_msg.sender_addr = sender_addr;
+                    return true;
+                } else {
+                    // Ignore packet from other client
+                    continue;
+                }
+            }
+        } else {
+            if (bytes_received < 0) {
+                // EAGAIN or EWOULDBLOCK means no data is currently available
+                if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                    std::cerr << "UDP Receive error: " << strerror(errno) << std::endl;
+                }
+            }
+            return false;
         }
     }
-    
-    return false;
 }
 
 const ServerStatus UdpServer::getStatus()
@@ -50,13 +68,13 @@ const ServerStatus UdpServer::getStatus()
     return status;
 }
 
-bool UdpServer::send(const std::vector<uint8_t>& data, const struct sockaddr_in& dest_addr) {
+bool UdpServer::send(const std::vector<uint8_t>& data) {
     std::lock_guard<std::mutex> lock(socket_mutex_);
     
     if (socket_fd_ < 0) return false;
 
     ssize_t bytes_sent = sendto(socket_fd_, data.data(), data.size(), 0,
-                                (const struct sockaddr*)&dest_addr, sizeof(dest_addr));
+                                (const struct sockaddr*)&client_addr_, sizeof(client_addr_));
 
     if (bytes_sent < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -111,5 +129,36 @@ void UdpServer::closeSocket() {
     if (socket_fd_ >= 0) {
         close(socket_fd_);
         socket_fd_ = -1;
+    }
+}
+
+bool UdpServer::isClientConnected() const {
+    return has_client_;
+}
+
+std::string UdpServer::getConnectedClientIP() {
+    std::lock_guard<std::mutex> lock(socket_mutex_);
+    if (!has_client_) return "N/A";
+    char ip_str[INET_ADDRSTRLEN];
+    if (inet_ntop(AF_INET, &(client_addr_.sin_addr), ip_str, INET_ADDRSTRLEN) == nullptr) {
+        return "N/A";
+    }
+    return std::string(ip_str);
+}
+
+uint16_t UdpServer::getConnectedClientPort() {
+    std::lock_guard<std::mutex> lock(socket_mutex_);
+    if (!has_client_) return 0;
+    return ntohs(client_addr_.sin_port);
+}
+
+void UdpServer::disconnectClient() {
+    std::lock_guard<std::mutex> lock(socket_mutex_);
+    if (has_client_) {
+        has_client_ = false;
+        std::memset(&client_addr_, 0, sizeof(client_addr_));
+        if (status == SERVER_CONNECTED) {
+            status = SERVER_LISTEN;
+        }
     }
 }
