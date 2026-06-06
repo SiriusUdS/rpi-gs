@@ -42,6 +42,8 @@ enum ColorPair {
     CP_BTN_F    = 11,  // black on white  (button focused)
     CP_BTN_DIS  = 12,  // black on darkgray (button disabled) — fall back to normal
     CP_FAIL     = 13,
+    CP_DANGER   = 14,
+    CP_WARNING  = 15,
 };
 
 struct TUI {
@@ -67,6 +69,8 @@ struct TUI {
         init_pair(CP_BTN_F,    COLOR_BLACK,   COLOR_WHITE);
         init_pair(CP_BTN_DIS,  COLOR_BLACK,   COLOR_BLACK);
         init_pair(CP_FAIL, COLOR_RED, COLOR_BLACK);
+        init_pair(CP_DANGER,   COLOR_WHITE,   COLOR_RED);
+        init_pair(CP_WARNING,  COLOR_BLACK,   COLOR_YELLOW);
     }
     static void shutdown() { endwin(); }
 };

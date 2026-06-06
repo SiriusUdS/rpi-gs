@@ -11,6 +11,13 @@
 #include <cstdint>
 #include <thread>
 #include <atomic>
+#include <chrono>
+
+#define UNSAFE_STATE_IDLE 1
+#define UNSAFE_STATE_FIRE 2
+#define UNSAFE_STATE_VALVE 3
+#define UNSAFE_STATE_FILL 4
+
 
 // Amount of control buttons
 static constexpr int GS_CONTROL_BUTTON_AMOUNT = 8;
@@ -49,6 +56,11 @@ public:
     void toggleErrorFlag();
 
     bool canSendValve = false;
+
+    bool valveActivate = false;
+
+    bool igniterActivate = false;
+    uint8_t unsafeState = UNSAFE_STATE_IDLE;
 
     // System Request State control (thread-safe)
     uint8_t getSystemRequestState() const { return system_request_state_.load(); }
@@ -150,8 +162,17 @@ private:
     std::atomic<bool> running_;
 
     void run(); // Main worker thread loop method
+    void processReceiving();
+    void processStateMachine(std::chrono::steady_clock::time_point& last_timer);
+    void processSending();
+
     void updateButtons();
     void onButtonStateChanged(int index, bool pressed);
     void sendGSStatusPacket();
     void updateFSM();
+
+    void unsafeIdle();
+    void unsafeFire();
+    void unsafeValve();
+    void unsafeFill();
 };

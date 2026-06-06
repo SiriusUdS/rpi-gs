@@ -15,6 +15,25 @@
 #include <iostream>
 #include <chrono>
 
+/**
+ * VAVLE OK
+ * 
+ * UNSAFE OK
+ * 
+ * EMERGENCY FORCE THE ABORT STATE NO MATTER WHAT BUTTON WE CLICK ON IT
+ * 
+ * make the button without delay (like ish 100ms)
+ */
+
+#define ALLOW_FILL_BTN 0
+#define ARM_VALVE_BTN 1
+#define ARM_IGNITER_BTN 2
+#define ALLOW_DUMP_BTN 3
+#define EMERGENCY_STOP_BTN 4
+#define FIRE_IGNITER_BTN 5
+#define VALVE_START_BTN 6
+#define UNSAFE_KEY_BTN 7
+
 static const int button_pins[GS_CONTROL_BUTTON_AMOUNT] = {
     21, // ALLOW_FILL
     20, // ARM_VALVE
@@ -103,6 +122,9 @@ void GroundStation::toggleErrorFlag() {
 }
 
 void GroundStation::setSystemRequestState(uint8_t state) {
+    if (buttons_[EMERGENCY_STOP_BTN].is_pressed.load() && state != GS_CONTROL_STATE_ABORT) {
+        return;
+    }
     if (system_request_state_.load() != state) {
         system_request_state_.store(state);
         std::string state_name = "UNKNOWN";
@@ -206,20 +228,13 @@ void GroundStation::updateButtons() {
             logged_error[i] = false;
         }
 
-        // Debounce consistent check: 15 consistent ticks (60ms) to transition state
-        if (raw_val == btn.last_raw_state) {
-            btn.debounce_counter++;
-            if (btn.debounce_counter >= 15) {
-                bool new_pressed = (raw_val == 1);
-                if (btn.is_pressed.load() != new_pressed) {
-                    btn.is_pressed.store(new_pressed);
-                    onButtonStateChanged(i, new_pressed);
-                }
-            }
-        } else {
-            btn.last_raw_state = raw_val;
-            btn.debounce_counter = 0;
+        // Direct state change (zero delay)
+        bool new_pressed = (raw_val == 1);
+        if (btn.is_pressed.load() != new_pressed) {
+            btn.is_pressed.store(new_pressed);
+            onButtonStateChanged(i, new_pressed);
         }
+        btn.last_raw_state = raw_val;
     }
 }
 
@@ -297,130 +312,185 @@ void GroundStation::updateFSM() {
     }
 }
 
+void GroundStation::unsafeIdle()
+{
+    if(buttons_[ALLOW_FILL_BTN].is_pressed){
+        unsafeState = UNSAFE_STATE_FILL;
+    }else if(buttons_[FIRE_IGNITER_BTN].is_pressed && buttons_[ARM_IGNITER_BTN].is_pressed){
+        unsafeState = UNSAFE_STATE_FIRE;
+    }
+}
+
+void GroundStation::unsafeFire()
+{
+    if(!buttons_[ARM_IGNITER_BTN].is_pressed){
+        unsafeState = UNSAFE_STATE_IDLE;
+    }else if(buttons_[ARM_VALVE_BTN].is_pressed && buttons_[VALVE_START_BTN].is_pressed){
+        unsafeState = UNSAFE_STATE_VALVE;
+    }
+}
+
+void GroundStation::unsafeValve()
+{
+    if(!buttons_[ARM_VALVE_BTN].is_pressed){
+        unsafeState = UNSAFE_STATE_IDLE;
+    }
+}
+
+void GroundStation::unsafeFill()
+{
+    if(!buttons_[ALLOW_FILL_BTN].is_pressed){
+        unsafeState = UNSAFE_STATE_IDLE;
+    }
+    canSendValve = true;
+}
+
 void GroundStation::handle_state_init() {
     // Stubs for actions to do at INIT state
+
+    unsafeState = UNSAFE_STATE_IDLE;
 }
 
 void GroundStation::handle_state_safe() {
     // Stubs for actions to do at SAFE state
+    valveActivate = false;
+    igniterActivate = false;
+    unsafeState = UNSAFE_STATE_IDLE;
 }
 
 void GroundStation::handle_state_unsafe() {
     // Stubs for actions to do at UNSAFE state
-    canSendValve = true;
+    switch(unsafeState){
+        case UNSAFE_STATE_IDLE:
+            unsafeIdle();
+            break;
+        case UNSAFE_STATE_FILL:
+            unsafeFill();
+            break;
+        case UNSAFE_STATE_FIRE:
+            unsafeFire();
+            break;
+        case UNSAFE_STATE_VALVE:
+            unsafeValve();
+            break;
+        
+    }
 }
 
 void GroundStation::handle_state_abort() {
     // Stubs for actions to do at ABORT state
+    unsafeState = UNSAFE_STATE_IDLE;
+}
+
+void GroundStation::processReceiving() {
+    UdpMessage server_msg;
+    while (server_.receive(server_msg)) {
+        if (!validateCrc(server_msg.data)) {
+            log("GS: CRC32 mismatch on local server link (from client device)! Discarding packet.");
+            server_crc_errors_++;
+            continue;
+        }
+        server_rx_packets_++;
+        server_rx_bytes_ += server_msg.data.size();
+        client_incoming_queue_.push(server_msg.data);
+    }
+
+    UdpClientMessage client_msg;
+    while (client_.receive(client_msg)) {
+        if (!validateCrc(client_msg.data)) {
+            log("GS: CRC32 mismatch on local client link (from remote server)! Discarding packet.");
+            client_crc_errors_++;
+            continue;
+        }
+        client_rx_packets_++;
+        client_rx_bytes_ += client_msg.data.size();
+        server_incoming_queue_.push(client_msg.data);
+        last_server_udp_ticks_.store(0);
+    }
+}
+
+void GroundStation::processStateMachine(std::chrono::steady_clock::time_point& last_timer) {
+    updateButtons();
+
+    updateFSM();
+
+    // Increment device connection timeouts every 100ms
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_timer).count();
+    if (elapsed >= 100) {
+        last_engine_udp_ticks_++;
+        last_fill_udp_ticks_++;
+        last_server_udp_ticks_++;
+        last_timer = now;
+        triggerRedraw();
+    }
+
+    std::vector<uint8_t> client_data;
+    while (client_incoming_queue_.pop(client_data)) {
+        server_outgoing_queue_.push(client_data);
+
+        if (client_data.size() >= sizeof(FrameUDPPacketHeader)) {
+            UDPPacketHeader packet_header;
+            std::memcpy(packet_header.bytes, client_data.data(), sizeof(FrameUDPPacketHeader));
+
+            uint32_t state_val = 0;
+            if (client_data.size() >= sizeof(FrameUDPPacketHeader) + sizeof(uint32_t)) {
+                std::memcpy(&state_val, client_data.data() + sizeof(FrameUDPPacketHeader), sizeof(uint32_t));
+            } else {
+                state_val = packet_header.frame.deviceState;
+            }
+
+            if (packet_header.frame.payloadID == SYNC_PACKET_CODE || 
+                packet_header.frame.payloadID == REQUEST_STATE) {
+                
+                if (packet_header.frame.deviceID == ENGINE_BOARD_ID) {
+                    engine_.setState((uint8_t)state_val);
+                    resetEngineTimeout();
+                    log("GS: RX Engine Board State Sync: 0x" + std::to_string(state_val));
+                } else if (packet_header.frame.deviceID == FILLING_STATION_BOARD_ID) {
+                    fill_.setState((uint8_t)state_val);
+                    resetFillTimeout();
+                    log("GS: RX Fill Station Board State Sync: 0x" + std::to_string(state_val));
+                }
+            }
+            log("GS: Redirected client packet (Device: " + std::to_string(packet_header.frame.deviceID) + ") to Server queue");
+            triggerRedraw();
+        }
+    }
+
+    std::vector<uint8_t> server_data;
+    while (server_incoming_queue_.pop(server_data)) {
+        if(canSendValve){
+            client_outgoing_queue_.push(server_data);
+        }
+    }
+}
+
+void GroundStation::processSending() {
+    std::vector<uint8_t> out_server_data;
+    while (server_outgoing_queue_.pop(out_server_data)) {
+        if (client_.send(out_server_data)) {
+            client_tx_packets_++;
+            client_tx_bytes_ += out_server_data.size();
+        }
+    }
+
+    std::vector<uint8_t> out_client_data;
+    while (client_outgoing_queue_.pop(out_client_data)) {
+        if (server_.send(out_client_data)) {
+            server_tx_packets_++;
+            server_tx_bytes_ += out_client_data.size();
+        }
+    }
 }
 
 void GroundStation::run() {
     auto last_timer = std::chrono::steady_clock::now();
     
     while (running_) {
-        // Debounce buttons
-        updateButtons();
-
-        // Update GroundStation FSM Transitions
-        updateFSM();
-
-        // Increment device connection timeouts every 100ms
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_timer).count();
-        if (elapsed >= 100) {
-            last_engine_udp_ticks_++;
-            last_fill_udp_ticks_++;
-            last_server_udp_ticks_++;
-            last_timer = now;
-            triggerRedraw();
-        }
-
-        // ── 1. RECEIVE FROM CLIENT boards/devices (UdpServer) ──
-        UdpMessage server_msg;
-        while (server_.receive(server_msg)) {
-            if (!validateCrc(server_msg.data)) {
-                log("GS: CRC32 mismatch on local server link (from client device)! Discarding packet.");
-                server_crc_errors_++;
-                continue;
-            }
-            server_rx_packets_++;
-            server_rx_bytes_ += server_msg.data.size();
-            client_incoming_queue_.push(server_msg.data);
-        }
-
-        // ── 2. RECEIVE FROM remote SERVER dashboard (UdpClient) ──
-        UdpClientMessage client_msg;
-        while (client_.receive(client_msg)) {
-            if (!validateCrc(client_msg.data)) {
-                log("GS: CRC32 mismatch on local client link (from remote server)! Discarding packet.");
-                client_crc_errors_++;
-                continue;
-            }
-            client_rx_packets_++;
-            client_rx_bytes_ += client_msg.data.size();
-            server_incoming_queue_.push(client_msg.data);
-            last_server_udp_ticks_.store(0);
-        }
-
-        // ── 3. PROCESS CLIENT INCOMING QUEUE (Redirect to Server Send queue + Process) ──
-        std::vector<uint8_t> client_data;
-        while (client_incoming_queue_.pop(client_data)) {
-            server_outgoing_queue_.push(client_data);
-
-            if (client_data.size() >= sizeof(FrameUDPPacketHeader)) {
-                UDPPacketHeader packet_header;
-                std::memcpy(packet_header.bytes, client_data.data(), sizeof(FrameUDPPacketHeader));
-
-                uint32_t state_val = 0;
-                if (client_data.size() >= sizeof(FrameUDPPacketHeader) + sizeof(uint32_t)) {
-                    std::memcpy(&state_val, client_data.data() + sizeof(FrameUDPPacketHeader), sizeof(uint32_t));
-                } else {
-                    state_val = packet_header.frame.deviceState;
-                }
-
-                if (packet_header.frame.payloadID == SYNC_PACKET_CODE || 
-                    packet_header.frame.payloadID == REQUEST_STATE) {
-                    
-                    if (packet_header.frame.deviceID == ENGINE_BOARD_ID) {
-                        engine_.setState((uint8_t)state_val);
-                        resetEngineTimeout();
-                        log("GS: RX Engine Board State Sync: 0x" + std::to_string(state_val));
-                    } else if (packet_header.frame.deviceID == FILLING_STATION_BOARD_ID) {
-                        fill_.setState((uint8_t)state_val);
-                        resetFillTimeout();
-                        log("GS: RX Fill Station Board State Sync: 0x" + std::to_string(state_val));
-                    }
-                }
-                log("GS: Redirected client packet (Device: " + std::to_string(packet_header.frame.deviceID) + ") to Server queue");
-                triggerRedraw();
-            }
-        }
-
-        // ── 4. PROCESS SERVER INCOMING QUEUE (Process & update system) ──
-        std::vector<uint8_t> server_data;
-        while (server_incoming_queue_.pop(server_data)) {
-            if(canSendValve){
-                client_outgoing_queue_.push(server_data);
-            }
-        }
-
-        // ── 5. TRANSMIT TO SERVER (UdpClient) ──
-        std::vector<uint8_t> out_server_data;
-        while (server_outgoing_queue_.pop(out_server_data)) {
-            if (client_.send(out_server_data)) {
-                client_tx_packets_++;
-                client_tx_bytes_ += out_server_data.size();
-            }
-        }
-
-        // ── 6. TRANSMIT TO CLIENT (UdpServer) ──
-        std::vector<uint8_t> out_client_data;
-        while (client_outgoing_queue_.pop(out_client_data)) {
-            if (server_.send(out_client_data)) {
-                server_tx_packets_++;
-                server_tx_bytes_ += out_client_data.size();
-            }
-        }
+        processReceiving();
+        processStateMachine(last_timer);
+        processSending();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }

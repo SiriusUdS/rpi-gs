@@ -172,6 +172,99 @@ void GroundStationScreen::draw(Panel* p, bool focused) {
     wnoutrefresh(statusW);
     wnoutrefresh(logW);
 
+    // ── Popup overlays (exclusive, priority: ABORT > DANGER > ALLOW_FILL) ────
+    if (req_state == GS_CONTROL_STATE_ABORT) {
+        int popup_h = 8;
+        int popup_w = 40;
+        int popup_y = (avail_h - popup_h) / 2;
+        int popup_x = (avail_w - popup_w) / 2;
+
+        WINDOW* popupW = derwin(parent, popup_h, popup_w, popup_y, popup_x);
+        if (popupW) {
+            werase(popupW);
+            wbkgd(popupW, COLOR_PAIR(CP_DANGER));
+            wattron(popupW, COLOR_PAIR(CP_DANGER) | A_BOLD | A_BLINK);
+            box(popupW, 0, 0);
+
+            std::string title = " EMERGENCY ABORT ";
+            mvwprintw(popupW, 0, (popup_w - (int)title.size()) / 2, "%s", title.c_str());
+
+            std::string msg1 = "SYSTEM ABORTED!";
+            std::string msg2 = "EMERGENCY BUTTON ACTIVE";
+            std::string msg3 = "ALL OPERATIONS HALTED";
+            std::string msg4 = "IMMEDIATE RESET REQUIRED";
+
+            mvwprintw(popupW, 2, (popup_w - (int)msg1.size()) / 2, "%s", msg1.c_str());
+            mvwprintw(popupW, 3, (popup_w - (int)msg2.size()) / 2, "%s", msg2.c_str());
+            mvwprintw(popupW, 4, (popup_w - (int)msg3.size()) / 2, "%s", msg3.c_str());
+            mvwprintw(popupW, 5, (popup_w - (int)msg4.size()) / 2, "%s", msg4.c_str());
+            wattroff(popupW, COLOR_PAIR(CP_DANGER) | A_BOLD | A_BLINK);
+
+            wnoutrefresh(popupW);
+            delwin(popupW);
+        }
+    } else if (req_state == GS_CONTROL_STATE_UNSAFE &&
+               buttons[1].is_pressed.load() &&
+               buttons[2].is_pressed.load()) {
+        int popup_h = 8;
+        int popup_w = 40;
+        int popup_y = (avail_h - popup_h) / 2;
+        int popup_x = (avail_w - popup_w) / 2;
+
+        WINDOW* popupW = derwin(parent, popup_h, popup_w, popup_y, popup_x);
+        if (popupW) {
+            werase(popupW);
+            wbkgd(popupW, COLOR_PAIR(CP_DANGER));
+            wattron(popupW, COLOR_PAIR(CP_DANGER) | A_BOLD);
+            box(popupW, 0, 0);
+
+            std::string title = " DANGER WARNING ";
+            mvwprintw(popupW, 0, (popup_w - (int)title.size()) / 2, "%s", title.c_str());
+
+            std::string msg1 = "CRITICAL CONDITION!";
+            std::string msg2 = "ARM VALVES & ARM IGNITER";
+            std::string msg3 = "ARE BOTH ON UNDER";
+            std::string msg4 = "UNSAFE STATE!";
+
+            mvwprintw(popupW, 2, (popup_w - (int)msg1.size()) / 2, "%s", msg1.c_str());
+            mvwprintw(popupW, 3, (popup_w - (int)msg2.size()) / 2, "%s", msg2.c_str());
+            mvwprintw(popupW, 4, (popup_w - (int)msg3.size()) / 2, "%s", msg3.c_str());
+            mvwprintw(popupW, 5, (popup_w - (int)msg4.size()) / 2, "%s", msg4.c_str());
+            wattroff(popupW, COLOR_PAIR(CP_DANGER) | A_BOLD);
+
+            wnoutrefresh(popupW);
+            delwin(popupW);
+        }
+    } else if (buttons[0].is_pressed.load()) {
+        int popup_h = 7;
+        int popup_w = 40;
+        int popup_y = (avail_h - popup_h) / 2;
+        int popup_x = (avail_w - popup_w) / 2;
+
+        WINDOW* popupW = derwin(parent, popup_h, popup_w, popup_y, popup_x);
+        if (popupW) {
+            werase(popupW);
+            wbkgd(popupW, COLOR_PAIR(CP_WARNING));
+            wattron(popupW, COLOR_PAIR(CP_WARNING) | A_BOLD);
+            box(popupW, 0, 0);
+
+            std::string title = " WARNING ";
+            mvwprintw(popupW, 0, (popup_w - (int)title.size()) / 2, "%s", title.c_str());
+
+            std::string msg1 = "ALLOW FILL ACTIVE!";
+            std::string msg2 = "FILL STATION OPERATION";
+            std::string msg3 = "IS PERMITTED";
+
+            mvwprintw(popupW, 2, (popup_w - (int)msg1.size()) / 2, "%s", msg1.c_str());
+            mvwprintw(popupW, 3, (popup_w - (int)msg2.size()) / 2, "%s", msg2.c_str());
+            mvwprintw(popupW, 4, (popup_w - (int)msg3.size()) / 2, "%s", msg3.c_str());
+            wattroff(popupW, COLOR_PAIR(CP_WARNING) | A_BOLD);
+
+            wnoutrefresh(popupW);
+            delwin(popupW);
+        }
+    }
+
     delwin(logW);
     delwin(statusW);
 }

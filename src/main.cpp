@@ -44,18 +44,6 @@ int main() {
     std::vector<MenuItem> nav_items;
     for (auto& s : screens)
         nav_items.push_back({s->getTitle(), nullptr, {}, false});
-    nav_items.push_back({"", nullptr, {}, true});
-    nav_items.push_back({
-        "Settings", nullptr, {
-            {"Theme",    []{ Dialog::show("Theme",    "Theme changed!",  {"OK"}); }},
-            {"Language", []{ Dialog::show("Language", "Language saved.", {"OK"}); }},
-            {"", nullptr, {}, true},
-            {"Advanced", nullptr, {
-                {"Reset all", []{ Dialog::show("Reset",  "All settings reset.", {"OK"}); }},
-                {"Export",    []{ Dialog::show("Export", "Config exported.",    {"OK"}); }},
-            }, false},
-        }, false
-    });
 
     // ── App state ─────────────────────────────────────────────────────────────
     TitleBar  title("#  Sirius Dashboard  #");

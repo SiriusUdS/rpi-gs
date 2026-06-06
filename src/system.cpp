@@ -3,7 +3,7 @@
 SiriusSystem::SiriusSystem()
     : ground_station(gpio_reader)
 {
-    gpio_reader.start();
+    gpio_reader.start(5);
 }
 
 const ServerStatus SiriusSystem::getServerStatus()
