@@ -27,26 +27,20 @@ void GroundStationScreen::draw(Panel* p, bool focused) {
     int avail_h = getmaxy(parent);
     int avail_w = getmaxx(parent);
 
-    // Split layout: 45% left for Status & Buttons, 55% right for logs
+    // Single panel taking full width
     int sub_h = avail_h - 2;
-    int status_w = (avail_w - 6) * 45 / 100;
-    int log_w = avail_w - 6 - status_w;
+    int status_w = avail_w - 4;
 
     WINDOW* statusW = derwin(parent, sub_h, status_w, 1, 2);
-    WINDOW* logW = derwin(parent, sub_h, log_w, 1, 2 + status_w + 2);
 
-    if (!statusW || !logW) {
-        if (statusW) delwin(statusW);
-        if (logW) delwin(logW);
+    if (!statusW) {
         return;
     }
 
     werase(statusW);
-    werase(logW);
 
     // Draw borders with titles
     draw_box(statusW, "GS STATUS & INPUTS", focused);
-    draw_box(logW, "ACTIVITY LOG (GS.log())", false);
 
     auto& gs = SiriusSystem::getInstance().getGroundStation();
 
@@ -146,19 +140,6 @@ void GroundStationScreen::draw(Panel* p, bool focused) {
     }
 
 
-    // ── Right Column: Scrolling Logs ─────────────────────────────────────────
-    const auto& logs = gs.getLogs();
-    int log_display_h = sub_h - 2;
-    int start_idx = std::max(0, (int)logs.size() - log_display_h);
-    for (int i = 0; i < log_display_h && (start_idx + i) < (int)logs.size(); ++i) {
-        std::string line = logs[start_idx + i];
-        if ((int)line.size() > log_w - 4) {
-            line = line.substr(0, log_w - 7) + "...";
-        }
-        mvwprintw(logW, 1 + i, 2, "%s", line.c_str());
-    }
-
-
     // ── Bottom Legend ────────────────────────────────────────────────────────
     wattron(parent, COLOR_PAIR(CP_LABEL));
     std::string legend = " Ground Station Status Monitor (Viewer Mode) ";
@@ -170,7 +151,6 @@ void GroundStationScreen::draw(Panel* p, bool focused) {
 
     wnoutrefresh(parent);
     wnoutrefresh(statusW);
-    wnoutrefresh(logW);
 
     // ── Popup overlays (exclusive, priority: ABORT > DANGER > ALLOW_FILL) ────
     if (req_state == GS_CONTROL_STATE_ABORT) {
@@ -265,7 +245,6 @@ void GroundStationScreen::draw(Panel* p, bool focused) {
         }
     }
 
-    delwin(logW);
     delwin(statusW);
 }
 
@@ -274,6 +253,66 @@ bool GroundStationScreen::tick() {
 }
 
 bool GroundStationScreen::handle_key(int key) {
+    if (key == 27 || key == KEY_LEFT) { // ESC or LEFT
+        return false; // hand focus back to menu
+    }
+    return true; // swallow other keys
+}
+
+GroundStationLogScreen::GroundStationLogScreen()
+    : Screen("GS Logs") {
+}
+
+GroundStationLogScreen::~GroundStationLogScreen() {
+}
+
+void GroundStationLogScreen::draw(Panel* p, bool focused) {
+    WINDOW* parent = p->inner();
+    werase(parent);
+
+    int avail_h = getmaxy(parent);
+    int avail_w = getmaxx(parent);
+
+    int sub_h = avail_h - 2;
+    int log_w = avail_w - 4;
+
+    WINDOW* logW = derwin(parent, sub_h, log_w, 1, 2);
+    if (!logW) return;
+
+    werase(logW);
+    draw_box(logW, "ACTIVITY LOG (GS.log())", focused);
+
+    auto& gs = SiriusSystem::getInstance().getGroundStation();
+    const auto& logs = gs.getLogs();
+    int log_display_h = sub_h - 2;
+    int start_idx = std::max(0, (int)logs.size() - log_display_h);
+    for (int i = 0; i < log_display_h && (start_idx + i) < (int)logs.size(); ++i) {
+        std::string line = logs[start_idx + i];
+        if ((int)line.size() > log_w - 4) {
+            line = line.substr(0, log_w - 7) + "...";
+        }
+        mvwprintw(logW, 1 + i, 2, "%s", line.c_str());
+    }
+
+    // ── Bottom Legend ────────────────────────────────────────────────────────
+    wattron(parent, COLOR_PAIR(CP_LABEL));
+    std::string legend = " Ground Station Activity Log (Viewer Mode) ";
+    int legend_x = (avail_w - (int)legend.size()) / 2;
+    if (legend_x > 0) {
+        mvwprintw(parent, avail_h - 1, legend_x, "%s", legend.c_str());
+    }
+    wattroff(parent, COLOR_PAIR(CP_LABEL));
+
+    wnoutrefresh(parent);
+    wnoutrefresh(logW);
+    delwin(logW);
+}
+
+bool GroundStationLogScreen::tick() {
+    return true; // Force redraw to show log updates
+}
+
+bool GroundStationLogScreen::handle_key(int key) {
     if (key == 27 || key == KEY_LEFT) { // ESC or LEFT
         return false; // hand focus back to menu
     }

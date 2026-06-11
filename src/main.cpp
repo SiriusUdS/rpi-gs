@@ -38,6 +38,7 @@ int main() {
     screens.push_back(std::make_unique<NetworkPage>());
     screens.push_back(std::make_unique<DevicesPages>());
     screens.push_back(std::make_unique<GroundStationScreen>());
+    screens.push_back(std::make_unique<GroundStationLogScreen>());
     screens.push_back(std::make_unique<HandoffScreen>("Shell", "/bin/sh"));
 
     // ── Build nav from screen titles ─────────────────────────────────────────
@@ -87,6 +88,11 @@ int main() {
     apply_timeout();
     draw_all();
 
+    // ── GPIO Menu Navigation State ───────────────────────────────────────────
+    int last_up_state = 0;
+    int last_down_state = 0;
+    int last_select_state = 0;
+
     // ── Event loop ────────────────────────────────────────────────────────────
     auto last_tick = Clock::now();
     int key;
@@ -95,6 +101,43 @@ int main() {
         if (SiriusSystem::getInstance().getGroundStation().tick()) {
             needs_redraw = true;
         }
+
+        // Process GPIO menu navigation buttons
+        auto& gpio = SiriusSystem::getInstance().getGpioReader();
+        int up_val = gpio.getPinValue(22);
+        int down_val = gpio.getPinValue(23);
+        int select_val = gpio.getPinValue(24);
+
+        if (key == ERR) {
+            if (up_val == 1 && last_up_state == 0) {
+                key = KEY_UP;
+            } else if (down_val == 1 && last_down_state == 0) {
+                key = KEY_DOWN;
+            } else if (select_val == 1 && last_select_state == 0) {
+                if (focus == Focus::NAV) {
+                    // Select/activate page and enter focus
+                    int sel = nav.selected;
+                    if (sel < (int)screens.size()) {
+                        if (has_screen()) screens[cur_screen]->on_leave();
+                        cur_screen = sel;
+                        screens[cur_screen]->on_enter();
+                        focus = Focus::CONTENT;
+                        apply_timeout();
+                    }
+                } else {
+                    // If already focused, exit focus and return to menu
+                    if (has_screen()) screens[cur_screen]->on_leave();
+                    focus = Focus::NAV;
+                    cur_screen = -1; // back to welcome on nav return
+                    apply_timeout();
+                }
+                needs_redraw = true;
+            }
+        }
+
+        if (up_val >= 0) last_up_state = up_val;
+        if (down_val >= 0) last_down_state = down_val;
+        if (select_val >= 0) last_select_state = select_val;
 
         if (key == ERR) {
             // Timeout — only tick if a real screen is active

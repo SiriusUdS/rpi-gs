@@ -96,6 +96,11 @@ GroundStation::GroundStation(GpioReader& gpio_reader)
         gpio_reader_.addPin(button_pins[i]);
     }
 
+    // Register menu navigation buttons
+    gpio_reader_.addPin(22); // MENU_UP
+    gpio_reader_.addPin(23); // MENU_DOWN
+    gpio_reader_.addPin(24); // MENU_SELECT
+
     worker_thread_ = std::thread(&GroundStation::run, this);
 }
 
