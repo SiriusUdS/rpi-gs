@@ -81,6 +81,7 @@ public:
 
     // Send commands manually (e.g. overrides from Devices screen)
     void sendDeviceStatePacket(uint8_t device_id, uint8_t payload_id, uint32_t state_val);
+    void sendTelemetryPacket();
 
     // Redraw flag check for TUI sync
     bool checkAndClearRedraw() {

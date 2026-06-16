@@ -1,3 +1,6 @@
 [submodule "sirius-headers-common"]
 	path = inc/sirius-headers-common
 	url = https://github.com/SiriusUdS/sirius-headers-common.git
+[submodule "inc/common-protocol"]
+	path = inc/common-protocol
+	url = https://github.com/SiriusUdS/common-protocol.git

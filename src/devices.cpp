@@ -1,10 +1,5 @@
 #include "devices.h"
 #include "system.h"
-#include "sirius-headers-common/Engine/EngineState.h"
-#include "sirius-headers-common/FillingStation/FillingStationState.h"
-#include "sirius-headers-common/Ethernet/UDPFrame.h"
-#include "sirius-headers-common/Telecommunication/BoardCommandV2.h"
-#include "sirius-headers-common/Telecommunication/PacketHeaderVariable.h"
 #include <cstring>
 
 DevicesPages::DevicesPages()

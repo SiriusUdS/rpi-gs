@@ -1,6 +1,6 @@
 #include "GroundStationScreen.h"
 #include "system.h"
-#include "sirius-headers-common/GSControl/GSControlState.h"
+#include "system/state.hpp"
 
 static const char* gs_button_names[GS_CONTROL_BUTTON_AMOUNT] = {
     "ALLOW_FILL",
@@ -8,8 +8,8 @@ static const char* gs_button_names[GS_CONTROL_BUTTON_AMOUNT] = {
     "ARM_IGNITER",
     "ALLOW_DUMP",
     "EMERGENCY_STOP",
-    "FIRE_IGNITER",
     "VALVE_START",
+    "FIRE_IGNITER",
     "UNSAFE_KEY"
 };
 
@@ -64,10 +64,16 @@ void GroundStationScreen::draw(Panel* p, bool focused) {
     mvwprintw(statusW, y, 2, "Req State:  ");
     uint8_t req_state = gs.getSystemRequestState();
     std::string req_state_str = "UNKNOWN";
-    if (req_state == GS_CONTROL_STATE_INIT) req_state_str = "INIT (0x00)";
-    else if (req_state == GS_CONTROL_STATE_SAFE) req_state_str = "SAFE (0x01)";
-    else if (req_state == GS_CONTROL_STATE_UNSAFE) req_state_str = "UNSAFE (0x02)";
-    else if (req_state == GS_CONTROL_STATE_ABORT) req_state_str = "ABORT (0x03)";
+    if (req_state == static_cast<uint8_t>(logic::control::State::Init)) req_state_str = "INIT (0x00)";
+    else if (req_state == static_cast<uint8_t>(logic::control::State::Safe)) req_state_str = "SAFE (0x01)";
+    else if (req_state == static_cast<uint8_t>(logic::control::State::Unsafe)) {
+        req_state_str = "UNSAFE (0x02)";
+        if (gs.unsafeState == UNSAFE_STATE_IDLE) req_state_str += " - IDLE";
+        else if (gs.unsafeState == UNSAFE_STATE_FIRE) req_state_str += " - FIRE";
+        else if (gs.unsafeState == UNSAFE_STATE_VALVE) req_state_str += " - VALVE";
+        else if (gs.unsafeState == UNSAFE_STATE_FILL) req_state_str += " - FILL";
+    }
+    else if (req_state == static_cast<uint8_t>(logic::control::State::Abort)) req_state_str = "ABORT (0x03)";
     
     wattron(statusW, COLOR_PAIR(CP_LABEL) | A_BOLD);
     mvwprintw(statusW, y, 15, "%s", req_state_str.c_str());
@@ -153,7 +159,7 @@ void GroundStationScreen::draw(Panel* p, bool focused) {
     wnoutrefresh(statusW);
 
     // ── Popup overlays (exclusive, priority: ABORT > DANGER > ALLOW_FILL) ────
-    if (req_state == GS_CONTROL_STATE_ABORT) {
+    if (req_state == static_cast<uint8_t>(logic::control::State::Abort)) {
         int popup_h = 8;
         int popup_w = 40;
         int popup_y = (avail_h - popup_h) / 2;
@@ -183,7 +189,7 @@ void GroundStationScreen::draw(Panel* p, bool focused) {
             wnoutrefresh(popupW);
             delwin(popupW);
         }
-    } else if (req_state == GS_CONTROL_STATE_UNSAFE &&
+    } else if (req_state == static_cast<uint8_t>(logic::control::State::Unsafe) &&
                buttons[1].is_pressed.load() &&
                buttons[2].is_pressed.load()) {
         int popup_h = 8;

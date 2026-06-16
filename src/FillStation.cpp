@@ -1,7 +1,7 @@
 #include "FillStation.h"
-#include "sirius-headers-common/FillingStation/FillingStationState.h"
+#include "system/state.hpp"
 
-FillStation::FillStation(): state(FILLING_STATION_STATE_INIT)
+FillStation::FillStation(): state(static_cast<uint8_t>(logic::control::State::Init))
 {
 }
 
@@ -91,49 +91,49 @@ void FillStation::draw(WINDOW *w, bool focused, bool connected)
     int right_x = cx + 13;    // Right node x
 
     // Draw central flow states
-    drawNode(w, 2, cx, 12, "INIT", state == FILLING_STATION_STATE_INIT, focused);
+    drawNode(w, 2, cx, 12, "INIT", state == static_cast<uint8_t>(logic::control::State::Init), focused);
     
     // Arrow INIT -> SAFE
     wattron(w, COLOR_PAIR(CP_BORDER));
     mvwaddch(w, 5, cx + 5, ACS_DARROW);
     wattroff(w, COLOR_PAIR(CP_BORDER));
 
-    drawNode(w, 6, cx, 12, "SAFE", state == FILLING_STATION_STATE_SAFE, focused);
+    drawNode(w, 6, cx, 12, "SAFE", state == static_cast<uint8_t>(logic::control::State::Safe), focused);
 
     // Arrow SAFE -> TEST
     wattron(w, COLOR_PAIR(CP_BORDER));
     mvwaddch(w, 7, cx + 12, ACS_HLINE);
     mvwaddch(w, 7, cx + 13, ACS_RARROW);
     wattroff(w, COLOR_PAIR(CP_BORDER));
-    drawNode(w, 6, right_x, 10, "TEST", state == FILLING_STATION_STATE_TEST, focused);
+    drawNode(w, 6, right_x, 10, "TEST", state == static_cast<uint8_t>(logic::control::State::Test), focused);
 
     // Arrow SAFE -> UNSAFE
     wattron(w, COLOR_PAIR(CP_BORDER));
     mvwaddch(w, 9, cx + 5, ACS_DARROW);
     wattroff(w, COLOR_PAIR(CP_BORDER));
 
-    drawNode(w, 10, cx, 12, "UNSAFE", state == FILLING_STATION_STATE_UNSAFE, focused);
+    drawNode(w, 10, cx, 12, "UNSAFE", state == static_cast<uint8_t>(logic::control::State::Unsafe), focused);
 
     // Arrow UNSAFE -> ABORT
     wattron(w, COLOR_PAIR(CP_BORDER));
     mvwaddch(w, 11, cx - 1, ACS_LARROW);
     mvwaddch(w, 11, cx - 2, ACS_HLINE);
     wattroff(w, COLOR_PAIR(CP_BORDER));
-    drawNode(w, 10, left_x, 10, "ABORT", state == FILLING_STATION_STATE_ABORT, focused);
+    drawNode(w, 10, left_x, 10, "ABORT", state == static_cast<uint8_t>(logic::control::State::Abort), focused);
 
     // Arrow UNSAFE -> IGNITE
     wattron(w, COLOR_PAIR(CP_BORDER));
     mvwaddch(w, 13, cx + 5, ACS_DARROW);
     wattroff(w, COLOR_PAIR(CP_BORDER));
 
-    drawNode(w, 14, cx, 12, "IGNITE", state == FILLING_STATION_STATE_IGNITE, focused);
+    drawNode(w, 14, cx, 12, "IGNITE", state == static_cast<uint8_t>(logic::control::State::Ignite), focused);
 
     // Arrow IGNITE -> ERROR
     wattron(w, COLOR_PAIR(CP_BORDER));
     mvwaddch(w, 15, cx - 1, ACS_LARROW);
     mvwaddch(w, 15, cx - 2, ACS_HLINE);
     wattroff(w, COLOR_PAIR(CP_BORDER));
-    drawNode(w, 14, left_x, 10, "ERROR", state == FILLING_STATION_STATE_ERROR, focused);
+    drawNode(w, 14, left_x, 10, "ERROR", state == static_cast<uint8_t>(logic::control::State::Error), focused);
 
     if (!connected) {
         drawConnectionMissingPopup(w);

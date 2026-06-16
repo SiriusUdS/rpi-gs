@@ -4,12 +4,17 @@
 #include "Crc32.h"
 #include <cerrno>
 #include <fstream>
-#include "sirius-headers-common/Engine/EngineState.h"
-#include "sirius-headers-common/FillingStation/FillingStationState.h"
-#include "sirius-headers-common/Ethernet/UDPFrame.h"
-#include "sirius-headers-common/Telecommunication/BoardCommandV2.h"
-#include "sirius-headers-common/Telecommunication/PacketHeaderVariable.h"
-#include "sirius-headers-common/GSControl/GSControlState.h"
+#include "system/state.hpp"
+#include "system/board_id.hpp"
+#include "system/crc32_polynomial.hpp"
+#include "framing/ethernet_header.hpp"
+#include "framing/payload_type.hpp"
+#include "response/response_type.hpp"
+#include "command/command_type.hpp"
+#include "telemetry/telemetry_type.hpp"
+#include "telemetry/fcu_system_state.hpp"
+#include "telemetry/ecu_system_state.hpp"
+#include "telemetry/gs_system_state.hpp"
 #include "sirius-headers-common/GSControl/GSControlStatus.h"
 #include <cstring>
 #include <iostream>
@@ -30,8 +35,8 @@
 #define ARM_IGNITER_BTN 2
 #define ALLOW_DUMP_BTN 3
 #define EMERGENCY_STOP_BTN 4
-#define FIRE_IGNITER_BTN 5
-#define VALVE_START_BTN 6
+#define VALVE_START_BTN 5
+#define FIRE_IGNITER_BTN 6
 #define UNSAFE_KEY_BTN 7
 
 static const int button_pins[GS_CONTROL_BUTTON_AMOUNT] = {
@@ -40,8 +45,8 @@ static const int button_pins[GS_CONTROL_BUTTON_AMOUNT] = {
     19, // ARM_IGNITER
     26, // ALLOW_DUMP
     12, // EMERGENCY_STOP
-    13, // FIRE_IGNITER
     16, // VALVE_START
+    13, // FIRE_IGNITER
     6  // UNSAFE_KEY
 };
 
@@ -52,7 +57,7 @@ static const char* button_names[GS_CONTROL_BUTTON_AMOUNT] = {
     "ALLOW_DUMP",
     "EMERGENCY_STOP",
     "FIRE_IGNITER",
-    "VALVE_START",
+    "VALVE START",
     "UNSAFE_KEY"
 };
 
@@ -60,7 +65,7 @@ GroundStation::GroundStation(GpioReader& gpio_reader)
     : gpio_reader_(gpio_reader),
       client_(IP_ADDRESS, REMOTE_SERVER_PORT, CLIENT_PORT),
       error_flagged_(false),
-      system_request_state_(GS_CONTROL_STATE_INIT),
+      system_request_state_(static_cast<uint8_t>(logic::control::State::Init)),
       last_engine_udp_ticks_(100),
       last_fill_udp_ticks_(100),
       last_server_udp_ticks_(100),
@@ -117,7 +122,7 @@ void GroundStation::setErrorFlagged(bool error) {
         log(std::string("GS: Error flag set to ") + (error ? "TRUE" : "FALSE"));
         
         // Broadcast error status to remote server via queue
-        sendDeviceStatePacket(GS_CONTROL_BOARD_ID, DIAGNOSE_PACKET_CODE, error ? 1 : 0);
+        sendDeviceStatePacket(static_cast<uint8_t>(BoardId::GsControl), 0x02, error ? 1 : 0);
         triggerRedraw();
     }
 }
@@ -127,20 +132,20 @@ void GroundStation::toggleErrorFlag() {
 }
 
 void GroundStation::setSystemRequestState(uint8_t state) {
-    if (buttons_[EMERGENCY_STOP_BTN].is_pressed.load() && state != GS_CONTROL_STATE_ABORT) {
+    if (buttons_[EMERGENCY_STOP_BTN].is_pressed.load() && state != static_cast<uint8_t>(logic::control::State::Abort)) {
         return;
     }
     if (system_request_state_.load() != state) {
         system_request_state_.store(state);
         std::string state_name = "UNKNOWN";
-        if (state == GS_CONTROL_STATE_INIT) state_name = "INIT";
-        else if (state == GS_CONTROL_STATE_SAFE) state_name = "SAFE";
-        else if (state == GS_CONTROL_STATE_UNSAFE) state_name = "UNSAFE";
-        else if (state == GS_CONTROL_STATE_ABORT) state_name = "ABORT";
+        if (state == static_cast<uint8_t>(logic::control::State::Init)) state_name = "INIT";
+        else if (state == static_cast<uint8_t>(logic::control::State::Safe)) state_name = "SAFE";
+        else if (state == static_cast<uint8_t>(logic::control::State::Unsafe)) state_name = "UNSAFE";
+        else if (state == static_cast<uint8_t>(logic::control::State::Abort)) state_name = "ABORT";
         log("GS: System Request State changed to " + state_name + " (0x" + std::to_string(state) + ")");
         
         // Broadcast new request state to devices via queue
-        sendDeviceStatePacket(GS_CONTROL_BOARD_ID, REQUEST_STATE, state);
+        sendDeviceStatePacket(static_cast<uint8_t>(BoardId::GsControl), static_cast<uint8_t>(logic::communication::command::CommandType::SetState), state);
         triggerRedraw();
     }
 }
@@ -167,20 +172,37 @@ void GroundStation::clearLogs() {
 }
 
 void GroundStation::sendDeviceStatePacket(uint8_t device_id, uint8_t payload_id, uint32_t state_val) {
-    UDPPacketHeader header;
+    uint8_t type = static_cast<uint8_t>(PayloadType::Command);
+    uint8_t id = payload_id;
+    uint8_t target = static_cast<uint8_t>(BoardId::Broadcast);
+
+    // Map legacy payload_id if needed
+    if (payload_id == 0x83) { // REQUEST_STATE legacy code
+        id = static_cast<uint8_t>(logic::communication::command::CommandType::SetState);
+    }
+
+    std::vector<uint8_t> packet(sizeof(EthernetHeader) + 4 + sizeof(uint32_t));
+    EthernetHeader header;
     std::memset(&header, 0, sizeof(header));
-    header.frame.deviceID = device_id;
-    header.frame.payloadID = payload_id;
-    header.frame.payloadLenght = sizeof(uint32_t);
-    header.frame.deviceState = (uint8_t)state_val;
-    header.frame.deviceTS_MS = 0;
+    header.sender_id = static_cast<uint32_t>(BoardId::GsControl);
+    header.target_id = target;
+    header.payload_type = type;
+    header.payload_id = id;
+    header.payload_size_bytes = 4; // padded to 4 bytes
+    header.sender_state = getSystemRequestState();
+    static std::atomic<uint8_t> g_seq{0};
+    header.seq = (g_seq++) % 16;
+    header.sender_timestamp_ms = 0;
 
-    std::vector<uint8_t> packet(sizeof(FrameUDPPacketHeader) + sizeof(uint32_t) + sizeof(uint32_t));
-    std::memcpy(packet.data(), header.bytes, sizeof(FrameUDPPacketHeader));
-    std::memcpy(packet.data() + sizeof(FrameUDPPacketHeader), &state_val, sizeof(uint32_t));
+    std::memcpy(packet.data(), &header, sizeof(EthernetHeader));
 
-    uint32_t crc = Crc32::calculate(packet.data() + sizeof(FrameUDPPacketHeader), sizeof(uint32_t));
-    std::memcpy(packet.data() + sizeof(FrameUDPPacketHeader) + sizeof(uint32_t), &crc, sizeof(uint32_t));
+    // Payload: copy 4 bytes (padded)
+    uint32_t val = state_val;
+    std::memcpy(packet.data() + sizeof(EthernetHeader), &val, sizeof(uint32_t));
+
+    // CRC-32 computed over EthernetHeader + padded Payload
+    uint32_t crc = Crc32::calculate(packet.data(), sizeof(EthernetHeader) + 4);
+    std::memcpy(packet.data() + sizeof(EthernetHeader) + 4, &crc, sizeof(uint32_t));
 
     enqueueServerSend(packet);
 }
@@ -234,7 +256,7 @@ void GroundStation::updateButtons() {
         }
 
         // Direct state change (zero delay)
-        bool new_pressed = (raw_val == 1);
+        bool new_pressed = (i == EMERGENCY_STOP_BTN) ? (raw_val == 0) : (raw_val == 1);
         if (btn.is_pressed.load() != new_pressed) {
             btn.is_pressed.store(new_pressed);
             onButtonStateChanged(i, new_pressed);
@@ -251,13 +273,13 @@ void GroundStation::onButtonStateChanged(int index, bool pressed) {
     // Transitions based on physical button states
     if (pressed) {
         if (index == 4) { // EMERGENCY_STOP
-            setSystemRequestState(GS_CONTROL_STATE_ABORT);
+            setSystemRequestState(static_cast<uint8_t>(logic::control::State::Abort));
         } else if (index == 7) { // UNSAFE_KEY
-            setSystemRequestState(GS_CONTROL_STATE_UNSAFE);
+            setSystemRequestState(static_cast<uint8_t>(logic::control::State::Unsafe));
         }
     } else {
         if (index == 7) { // UNSAFE_KEY released
-            setSystemRequestState(GS_CONTROL_STATE_SAFE);
+            setSystemRequestState(static_cast<uint8_t>(logic::control::State::Safe));
         }
     }
 
@@ -267,31 +289,38 @@ void GroundStation::onButtonStateChanged(int index, bool pressed) {
 }
 
 void GroundStation::sendGSStatusPacket() {
-    GSControlStatus status;
+    GSSystemState status;
     std::memset(&status, 0, sizeof(status));
-    status.bits.state = getSystemRequestState();
-    status.bits.isAllowFillSwitchOn = buttons_[0].is_pressed.load() ? 1 : 0;
-    status.bits.isArmServoSwitchOn = buttons_[1].is_pressed.load() ? 1 : 0;
-    status.bits.isArmIgniterSwitchOn = buttons_[2].is_pressed.load() ? 1 : 0;
-    status.bits.isAllowDumpSwitchOn = buttons_[3].is_pressed.load() ? 1 : 0;
-    status.bits.isEmergencyStopButtonPressed = buttons_[4].is_pressed.load() ? 1 : 0;
-    status.bits.isFireIgniterButtonPressed = buttons_[5].is_pressed.load() ? 1 : 0;
-    status.bits.isValveStartButtonPressed = buttons_[6].is_pressed.load() ? 1 : 0;
-    status.bits.isUnsafeKeySwitchPressed = buttons_[7].is_pressed.load() ? 1 : 0;
+    status.isAllowFillSwitchOn = buttons_[ALLOW_FILL_BTN].is_pressed.load() ? 1 : 0;
+    status.isArmServoSwitchOn = buttons_[ARM_VALVE_BTN].is_pressed.load() ? 1 : 0;
+    status.isArmIgniterSwitchOn = buttons_[ARM_IGNITER_BTN].is_pressed.load() ? 1 : 0;
+    status.isAllowDumpSwitchOn = buttons_[ALLOW_DUMP_BTN].is_pressed.load() ? 1 : 0;
+    status.isEmergencyStopButtonPressed = buttons_[EMERGENCY_STOP_BTN].is_pressed.load() ? 0 : 1;
+    status.isFireIgniterButtonPressed = buttons_[FIRE_IGNITER_BTN].is_pressed.load() ? 1 : 0;
+    status.isValveStartButtonPressed = buttons_[VALVE_START_BTN].is_pressed.load() ? 1 : 0;
+    status.isUnsafeKeySwitchPressed = buttons_[UNSAFE_KEY_BTN].is_pressed.load() ? 1 : 0;
+    status.reserved = 0;
+    status.fcuState = fill_.getState();
+    status.ecuState = engine_.getState();
 
-    UDPPacketHeader header;
+    std::vector<uint8_t> packet(sizeof(EthernetHeader) + sizeof(GSSystemState) + sizeof(uint32_t));
+    EthernetHeader header;
     std::memset(&header, 0, sizeof(header));
-    header.frame.deviceID = GS_CONTROL_BOARD_ID;
-    header.frame.payloadID = GET_SYSTEM; // telemetery status packet
-    header.frame.payloadLenght = sizeof(uint16_t);
-    header.frame.deviceState = getSystemRequestState();
+    header.sender_id = static_cast<uint32_t>(BoardId::GsControl);
+    header.target_id = static_cast<uint32_t>(BoardId::Broadcast);
+    header.payload_type = static_cast<uint32_t>(PayloadType::Telemetry);
+    header.payload_id = static_cast<uint8_t>(TelemetryType::SystemState); // 0x01 fits in 6 bits
+    header.payload_size_bytes = sizeof(GSSystemState);
+    header.sender_state = engine_.getState();
+    header.seq = 0;
+    header.sender_timestamp_ms = 0;
 
-    std::vector<uint8_t> packet(sizeof(FrameUDPPacketHeader) + sizeof(uint16_t) + sizeof(uint32_t));
-    std::memcpy(packet.data(), header.bytes, sizeof(FrameUDPPacketHeader));
-    std::memcpy(packet.data() + sizeof(FrameUDPPacketHeader), &status.value, sizeof(uint16_t));
+    std::memcpy(packet.data(), &header, sizeof(EthernetHeader));
+    std::memcpy(packet.data() + sizeof(EthernetHeader), &status, sizeof(GSSystemState));
 
-    uint32_t crc = Crc32::calculate(packet.data() + sizeof(FrameUDPPacketHeader), sizeof(uint16_t));
-    std::memcpy(packet.data() + sizeof(FrameUDPPacketHeader) + sizeof(uint16_t), &crc, sizeof(uint32_t));
+    // CRC-32 computed over EthernetHeader + GSSystemState payload
+    uint32_t crc = Crc32::calculate(packet.data(), sizeof(EthernetHeader) + sizeof(GSSystemState));
+    std::memcpy(packet.data() + sizeof(EthernetHeader) + sizeof(GSSystemState), &crc, sizeof(uint32_t));
 
     enqueueServerSend(packet);
 }
@@ -299,21 +328,14 @@ void GroundStation::sendGSStatusPacket() {
 void GroundStation::updateFSM() {
     uint8_t current_state = system_request_state_.load();
     canSendValve = false;
-    switch (current_state) {
-        case GS_CONTROL_STATE_INIT:
-            handle_state_init();
-            break;
-        case GS_CONTROL_STATE_SAFE:
-            handle_state_safe();
-            break;
-        case GS_CONTROL_STATE_UNSAFE:
-            handle_state_unsafe();
-            break;
-        case GS_CONTROL_STATE_ABORT:
-            handle_state_abort();
-            break;
-        default:
-            break;
+    if (current_state == static_cast<uint8_t>(logic::control::State::Init)) {
+        handle_state_init();
+    } else if (current_state == static_cast<uint8_t>(logic::control::State::Safe)) {
+        handle_state_safe();
+    } else if (current_state == static_cast<uint8_t>(logic::control::State::Unsafe)) {
+        handle_state_unsafe();
+    } else if (current_state == static_cast<uint8_t>(logic::control::State::Abort)) {
+        handle_state_abort();
     }
 }
 
@@ -321,7 +343,7 @@ void GroundStation::unsafeIdle()
 {
     if(buttons_[ALLOW_FILL_BTN].is_pressed){
         unsafeState = UNSAFE_STATE_FILL;
-    }else if(buttons_[FIRE_IGNITER_BTN].is_pressed && buttons_[ARM_IGNITER_BTN].is_pressed){
+    }else if(buttons_[VALVE_START_BTN].is_pressed && buttons_[ARM_IGNITER_BTN].is_pressed){
         unsafeState = UNSAFE_STATE_FIRE;
     }
 }
@@ -330,7 +352,7 @@ void GroundStation::unsafeFire()
 {
     if(!buttons_[ARM_IGNITER_BTN].is_pressed){
         unsafeState = UNSAFE_STATE_IDLE;
-    }else if(buttons_[ARM_VALVE_BTN].is_pressed && buttons_[VALVE_START_BTN].is_pressed){
+    }else if(buttons_[ARM_VALVE_BTN].is_pressed && buttons_[FIRE_IGNITER_BTN].is_pressed){
         unsafeState = UNSAFE_STATE_VALVE;
     }
 }
@@ -434,38 +456,59 @@ void GroundStation::processStateMachine(std::chrono::steady_clock::time_point& l
     while (client_incoming_queue_.pop(client_data)) {
         server_outgoing_queue_.push(client_data);
 
-        if (client_data.size() >= sizeof(FrameUDPPacketHeader)) {
-            UDPPacketHeader packet_header;
-            std::memcpy(packet_header.bytes, client_data.data(), sizeof(FrameUDPPacketHeader));
+        if (client_data.size() >= sizeof(EthernetHeader)) {
+            EthernetHeader header;
+            std::memcpy(&header, client_data.data(), sizeof(EthernetHeader));
 
-            uint32_t state_val = 0;
-            if (client_data.size() >= sizeof(FrameUDPPacketHeader) + sizeof(uint32_t)) {
-                std::memcpy(&state_val, client_data.data() + sizeof(FrameUDPPacketHeader), sizeof(uint32_t));
-            } else {
-                state_val = packet_header.frame.deviceState;
-            }
+            uint8_t state_val = header.sender_state;
 
-            if (packet_header.frame.payloadID == SYNC_PACKET_CODE || 
-                packet_header.frame.payloadID == REQUEST_STATE) {
-                
-                if (packet_header.frame.deviceID == ENGINE_BOARD_ID) {
-                    engine_.setState((uint8_t)state_val);
-                    resetEngineTimeout();
+            bool is_ack = (header.payload_type == static_cast<uint8_t>(PayloadType::Response)) &&
+                          (header.payload_id == static_cast<uint8_t>(ResponseType::Ack));
+
+            if (header.sender_id == static_cast<uint8_t>(BoardId::Engine)) {
+                engine_.setState(state_val);
+                resetEngineTimeout();
+                if (is_ack) {
+                    log("GS: RX Engine Board State Sync (Ack): 0x" + std::to_string(state_val));
+                } else {
                     log("GS: RX Engine Board State Sync: 0x" + std::to_string(state_val));
-                } else if (packet_header.frame.deviceID == FILLING_STATION_BOARD_ID) {
-                    fill_.setState((uint8_t)state_val);
-                    resetFillTimeout();
+                }
+            } else if (header.sender_id == static_cast<uint8_t>(BoardId::FillingStation)) {
+                fill_.setState(state_val);
+                resetFillTimeout();
+                if (is_ack) {
+                    log("GS: RX Fill Station Board State Sync (Ack): 0x" + std::to_string(state_val));
+                } else {
                     log("GS: RX Fill Station Board State Sync: 0x" + std::to_string(state_val));
                 }
             }
-            log("GS: Redirected client packet (Device: " + std::to_string(packet_header.frame.deviceID) + ") to Server queue");
+            log("GS: Redirected client packet (Device: " + std::to_string(header.sender_id) + ") to Server queue");
             triggerRedraw();
         }
     }
 
     std::vector<uint8_t> server_data;
     while (server_incoming_queue_.pop(server_data)) {
-        if(canSendValve){
+        if (server_data.size() >= sizeof(EthernetHeader) + sizeof(GSSystemState)) {
+            EthernetHeader header;
+            std::memcpy(&header, server_data.data(), sizeof(EthernetHeader));
+
+            if (header.payload_type == static_cast<uint8_t>(PayloadType::Telemetry) &&
+                header.payload_id == static_cast<uint8_t>(TelemetryType::SystemState)) {
+                GSSystemState status;
+                std::memcpy(&status, server_data.data() + sizeof(EthernetHeader), sizeof(GSSystemState));
+
+                fill_.setState(status.fcuState);
+                engine_.setState(status.ecuState);
+                resetFillTimeout();
+                resetEngineTimeout();
+
+                log("GS: RX GS System State from Computer: FCU 0x" + std::to_string(status.fcuState) + ", ECU 0x" + std::to_string(status.ecuState));
+                triggerRedraw();
+            }
+        }
+
+        if (canSendValve) {
             client_outgoing_queue_.push(server_data);
         }
     }
@@ -491,24 +534,38 @@ void GroundStation::processSending() {
 
 void GroundStation::run() {
     auto last_timer = std::chrono::steady_clock::now();
+    auto last_telemetry_time = std::chrono::steady_clock::now();
     
     while (running_) {
         processReceiving();
         processStateMachine(last_timer);
+
+        // Periodically send telemetry packet (e.g. every 100ms)
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_telemetry_time).count() >= 100) {
+            sendTelemetryPacket();
+            last_telemetry_time = now;
+        }
+
         processSending();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
 
+void GroundStation::sendTelemetryPacket() {
+    // TODO: Create and send telemetry packet
+}
+
+
 bool GroundStation::validateCrc(const std::vector<uint8_t>& data) const {
     size_t N = data.size();
-    if (N < sizeof(FrameUDPPacketHeader) + sizeof(uint32_t)) {
+    if (N < sizeof(EthernetHeader) + sizeof(uint32_t)) {
         return false;
     }
     
-    // Calculate CRC of the payload only (excluding the 12-byte header)
-    uint32_t calculated_crc = Crc32::calculate(data.data() + sizeof(FrameUDPPacketHeader), N - sizeof(FrameUDPPacketHeader) - sizeof(uint32_t));
+    // Calculate CRC of the header + payload (excluding the last 4 bytes of CRC)
+    uint32_t calculated_crc = Crc32::calculate(data.data(), N - sizeof(uint32_t));
     
     // Extract the received CRC from the last 4 bytes
     uint32_t received_crc = 0;

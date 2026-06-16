@@ -56,21 +56,23 @@ struct TUI {
         start_color();
         use_default_colors();
 
-        init_pair(CP_NORMAL,   COLOR_WHITE,   COLOR_BLACK);
-        init_pair(CP_TITLE,    COLOR_BLACK,   COLOR_CYAN);
-        init_pair(CP_SELECTED, COLOR_BLACK,   COLOR_WHITE);
-        init_pair(CP_BORDER,   COLOR_CYAN,    COLOR_BLACK);
-        init_pair(CP_BORDER_F, COLOR_WHITE,   COLOR_BLACK);
-        init_pair(CP_DIALOG,   COLOR_WHITE,   COLOR_BLUE);
-        init_pair(CP_STATUS,   COLOR_BLACK,   COLOR_YELLOW);
-        init_pair(CP_GRAPH,    COLOR_GREEN,   COLOR_BLACK);
-        init_pair(CP_LABEL,    COLOR_YELLOW,  COLOR_BLACK);
+        init_pair(CP_NORMAL,   COLOR_BLACK,   COLOR_WHITE);
+        init_pair(CP_TITLE,    COLOR_WHITE,   COLOR_BLUE);
+        init_pair(CP_SELECTED, COLOR_WHITE,   COLOR_BLACK);
+        init_pair(CP_BORDER,   COLOR_BLUE,    COLOR_WHITE);
+        init_pair(CP_BORDER_F, COLOR_BLACK,   COLOR_WHITE);
+        init_pair(CP_DIALOG,   COLOR_BLACK,   COLOR_CYAN);
+        init_pair(CP_STATUS,   COLOR_WHITE,   COLOR_BLUE);
+        init_pair(CP_GRAPH,    COLOR_GREEN,   COLOR_WHITE);
+        init_pair(CP_LABEL,    COLOR_BLUE,    COLOR_WHITE);
         init_pair(CP_BTN,      COLOR_BLACK,   COLOR_CYAN);
-        init_pair(CP_BTN_F,    COLOR_BLACK,   COLOR_WHITE);
-        init_pair(CP_BTN_DIS,  COLOR_BLACK,   COLOR_BLACK);
-        init_pair(CP_FAIL, COLOR_RED, COLOR_BLACK);
+        init_pair(CP_BTN_F,    COLOR_WHITE,   COLOR_BLUE);
+        init_pair(CP_BTN_DIS,  COLOR_BLACK,   COLOR_WHITE);
+        init_pair(CP_FAIL,     COLOR_RED,     COLOR_WHITE);
         init_pair(CP_DANGER,   COLOR_WHITE,   COLOR_RED);
         init_pair(CP_WARNING,  COLOR_BLACK,   COLOR_YELLOW);
+
+        bkgd(COLOR_PAIR(CP_NORMAL));
     }
     static void shutdown() { endwin(); }
 };
@@ -132,6 +134,8 @@ struct Panel {
         _inner = derwin(_win, rows - 2, cols - 2, 1, 1);
         keypad(_win, TRUE);
         keypad(_inner, TRUE);
+        wbkgd(_win, COLOR_PAIR(CP_NORMAL));
+        wbkgd(_inner, COLOR_PAIR(CP_NORMAL));
     }
     ~Panel() {
         if (_inner) delwin(_inner);

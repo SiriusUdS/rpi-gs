@@ -1,7 +1,7 @@
 CXX      = g++
 CTT      = aarch64-linux-gnu-g++
 CTTLIBS  = --sysroot=$(HOME)/rpi-build/staging -lncursesw -pthread -lgpiodcxx
-CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -Iinc
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -Iinc -Iinc/common-protocol
 LDFLAGS  = -lncurses -pthread
 
 TARGET      = tui_demo

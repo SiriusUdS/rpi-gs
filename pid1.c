@@ -45,7 +45,7 @@ int main() {
     ret = system("/sbin/ip link set eth0 up");
     if (ret != 0) write(2, "WARNING: Failed to bring eth0 up\n", 33);
 
-    ret = system("/sbin/ip addr add 192.168.0.100/24 dev eth0");
+    ret = system("/sbin/ip addr add 192.168.0.101/24 dev eth0");
     if (ret != 0) write(2, "WARNING: Failed to assign IP\n", 29);
 
     //ret = system("/sbin/ip route add default via 192.168.1.1");
