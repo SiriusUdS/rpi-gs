@@ -28,38 +28,23 @@ bool UdpServer::receive(UdpMessage& out_msg) {
     struct sockaddr_in sender_addr;
     socklen_t sender_len = sizeof(sender_addr);
 
-    while (true) {
-        ssize_t bytes_received = recvfrom(socket_fd_, buffer, sizeof(buffer), 0,
-                                          (struct sockaddr*)&sender_addr, &sender_len);
+    ssize_t bytes_received = recvfrom(socket_fd_, buffer, sizeof(buffer), 0,
+                                      (struct sockaddr*)&sender_addr, &sender_len);
 
-        if (bytes_received > 0) {
-            if (!has_client_) {
-                client_addr_ = sender_addr;
-                has_client_ = true;
-                status = SERVER_CONNECTED;
-                out_msg.data.assign(buffer, buffer + bytes_received);
-                out_msg.sender_addr = sender_addr;
-                return true;
-            } else {
-                if (sender_addr.sin_addr.s_addr == client_addr_.sin_addr.s_addr &&
-                    sender_addr.sin_port == client_addr_.sin_port) {
-                    out_msg.data.assign(buffer, buffer + bytes_received);
-                    out_msg.sender_addr = sender_addr;
-                    return true;
-                } else {
-                    // Ignore packet from other client
-                    continue;
+    if (bytes_received > 0) {
+        out_msg.data.assign(buffer, buffer + bytes_received);
+        out_msg.sender_addr = sender_addr;
+        return true;
+    } else {
+        if (bytes_received < 0) {
+            // EAGAIN or EWOULDBLOCK means no data is currently available
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                if (log_callback_) {
+                    log_callback_("UDP Server Receive error: " + std::string(strerror(errno)));
                 }
             }
-        } else {
-            if (bytes_received < 0) {
-                // EAGAIN or EWOULDBLOCK means no data is currently available
-                if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                    std::cerr << "UDP Receive error: " << strerror(errno) << std::endl;
-                }
-            }
-            return false;
         }
+        return false;
     }
 }
 
@@ -72,7 +57,7 @@ bool UdpServer::send(const std::vector<uint8_t>& data) {
     std::lock_guard<std::mutex> lock(socket_mutex_);
     
     if (socket_fd_ < 0) return false;
-
+    
     ssize_t bytes_sent = sendto(socket_fd_, data.data(), data.size(), 0,
                                 (const struct sockaddr*)&client_addr_, sizeof(client_addr_));
 
@@ -81,7 +66,9 @@ bool UdpServer::send(const std::vector<uint8_t>& data) {
             // OS send buffer is full, try again later
             return false;
         }
-        std::cerr << "UDP Send error: " << strerror(errno) << std::endl;
+        if (log_callback_) {
+            log_callback_("UDP Server Send error: " + std::string(strerror(errno)));
+        }
         return false;
     }
 
@@ -122,7 +109,14 @@ void UdpServer::initSocket() {
         return;
     }
 
-    status = SERVER_LISTEN;
+    // Configure static default client address to 192.168.0.100
+    std::memset(&client_addr_, 0, sizeof(client_addr_));
+    client_addr_.sin_family = AF_INET;
+    client_addr_.sin_port = htons(55555);
+    inet_pton(AF_INET, "192.168.0.100", &client_addr_.sin_addr);
+    has_client_ = true;
+
+    status = SERVER_CONNECTED;
 }
 
 void UdpServer::closeSocket() {
@@ -153,12 +147,5 @@ uint16_t UdpServer::getConnectedClientPort() {
 }
 
 void UdpServer::disconnectClient() {
-    std::lock_guard<std::mutex> lock(socket_mutex_);
-    if (has_client_) {
-        has_client_ = false;
-        std::memset(&client_addr_, 0, sizeof(client_addr_));
-        if (status == SERVER_CONNECTED) {
-            status = SERVER_LISTEN;
-        }
-    }
+    // No-op to preserve 192.168.0.100 target IP
 }

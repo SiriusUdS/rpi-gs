@@ -1,0 +1,9 @@
+LOG: GS: Ground Station backend initialized.
+LOG: GS: INFO - libgpiod v2 not enabled. Running in local simulation mode.
+LOG: GS: Button EMERGENCY_STOP state changed to PRESSED
+LOG: GS: State transition from INIT to ABORT
+LOG: GS DEBUG: popped server_data, size=20, sender_id=3, target_id=4, type=2, id=1
+LOG: GS: Fill Station Board state transitioned from INIT to ERROR
+LOG: GS: Engine Board state transitioned from INIT to IGNITE
+LOG: GS: GS State transitioned from ABORT to LAUNCH
+LOG: GS: RX GS System State from Computer: GS 0x6, FCU 0x4, ECU 0x5

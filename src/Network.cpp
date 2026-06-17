@@ -91,19 +91,41 @@ void NetworkPage::draw(Panel *p, bool focused)
     mvwprintw(w, y++, 6, "%-35s %-16s %-16s %-12s", "Link Name", "Packets (RX/TX)", "Bytes (RX/TX)", "CRC Errors");
     wattroff(w, COLOR_PAIR(CP_NORMAL) | A_UNDERLINE);
 
-    // Server Link metrics (Local Client socket connected to remote server)
+    // Client Link metrics (Local Client socket connected to remote server)
     mvwprintw(w, y++, 6, "%-35s %-7u / %-7u %-7lu / %-7lu %-12u",
-              "Server Link (to remote Dashboard)",
+              "Client Link (to remote Dashboard)",
               gs.getClientRxPackets(), gs.getClientTxPackets(),
               gs.getClientRxBytes(), gs.getClientTxBytes(),
               gs.getClientCrcErrors());
 
-    // Client Link metrics (Local Server socket listening for client boards)
+    // Server Link metrics (Local Server socket listening for client boards)
     mvwprintw(w, y++, 6, "%-35s %-7u / %-7u %-7lu / %-7lu %-12u",
-              "Client Link (from Boards)",
+              "Server Link (from client Boards)",
               gs.getServerRxPackets(), gs.getServerTxPackets(),
               gs.getServerRxBytes(), gs.getServerTxBytes(),
               gs.getServerCrcErrors());
+
+    // 5. Command & ACK Statistics
+    y += 2;
+    wattron(w, COLOR_PAIR(CP_LABEL) | A_BOLD);
+    mvwprintw(w, y++, 4, "=== DEVICE COMMAND/ACK STATS ===");
+    wattroff(w, COLOR_PAIR(CP_LABEL) | A_BOLD);
+
+    Label(w, y, 6, "Commands Sent to Devices: ", CP_NORMAL).draw();
+    mvwprintw(w, y, 35, "%u", gs.getDeviceCommandsSent());
+    y++;
+
+    Label(w, y, 6, "ACKs Received from Devices: ", CP_NORMAL).draw();
+    mvwprintw(w, y, 35, "%u", gs.getDeviceAcksReceived());
+    y++;
+
+    Label(w, y, 6, "ACK Success Rate: ", CP_NORMAL).draw();
+    if (gs.getDeviceCommandsSent() > 0) {
+        double rate = (double)gs.getDeviceAcksReceived() / gs.getDeviceCommandsSent() * 100.0;
+        mvwprintw(w, y, 35, "%.1f %%", rate);
+    } else {
+        mvwprintw(w, y, 35, "N/A");
+    }
 
     wnoutrefresh(w);
 }

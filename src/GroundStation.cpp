@@ -15,6 +15,7 @@
 #include "telemetry/fcu_system_state.hpp"
 #include "telemetry/ecu_system_state.hpp"
 #include "telemetry/gs_system_state.hpp"
+#include "command/command_type.hpp"
 #include "sirius-headers-common/GSControl/GSControlStatus.h"
 #include <cstring>
 #include <iostream>
@@ -44,7 +45,7 @@ static const int button_pins[GS_CONTROL_BUTTON_AMOUNT] = {
     20, // ARM_VALVE
     19, // ARM_IGNITER
     26, // ALLOW_DUMP
-    12, // EMERGENCY_STOP
+    EMERGENCY_STOP_PIN, // EMERGENCY_STOP
     16, // VALVE_START
     13, // FIRE_IGNITER
     6  // UNSAFE_KEY
@@ -80,7 +81,14 @@ GroundStation::GroundStation(GpioReader& gpio_reader)
       client_tx_bytes_(0),
       server_crc_errors_(0),
       client_crc_errors_(0),
-      running_(true) {
+      device_commands_sent_(0),
+      device_acks_received_(0),
+      running_(true),
+      seq_counter_(1) {
+    server_.setLogCallback([this](const std::string& msg) { log(msg); });
+    client_.setLogCallback([this](const std::string& msg) { log(msg); });
+    gpio_reader_.setLogCallback([this](const std::string& msg) { log(msg); });
+
     log("GS: Ground Station backend initialized.");
 
     // Verify GPIO initialization mode
@@ -135,14 +143,23 @@ void GroundStation::setSystemRequestState(uint8_t state) {
     if (buttons_[EMERGENCY_STOP_BTN].is_pressed.load() && state != static_cast<uint8_t>(logic::control::State::Abort)) {
         return;
     }
-    if (system_request_state_.load() != state) {
+    uint8_t old_state = system_request_state_.load();
+    if (old_state != state) {
         system_request_state_.store(state);
+        
+        std::string old_state_name = "UNKNOWN";
+        if (old_state == static_cast<uint8_t>(logic::control::State::Init)) old_state_name = "INIT";
+        else if (old_state == static_cast<uint8_t>(logic::control::State::Safe)) old_state_name = "SAFE";
+        else if (old_state == static_cast<uint8_t>(logic::control::State::Unsafe)) old_state_name = "UNSAFE";
+        else if (old_state == static_cast<uint8_t>(logic::control::State::Abort)) old_state_name = "ABORT";
+
         std::string state_name = "UNKNOWN";
         if (state == static_cast<uint8_t>(logic::control::State::Init)) state_name = "INIT";
         else if (state == static_cast<uint8_t>(logic::control::State::Safe)) state_name = "SAFE";
         else if (state == static_cast<uint8_t>(logic::control::State::Unsafe)) state_name = "UNSAFE";
         else if (state == static_cast<uint8_t>(logic::control::State::Abort)) state_name = "ABORT";
-        log("GS: System Request State changed to " + state_name + " (0x" + std::to_string(state) + ")");
+        
+        log("GS: State transition from " + old_state_name + " to " + state_name);
         
         // Broadcast new request state to devices via queue
         sendDeviceStatePacket(static_cast<uint8_t>(BoardId::GsControl), static_cast<uint8_t>(logic::communication::command::CommandType::SetState), state);
@@ -190,24 +207,49 @@ void GroundStation::sendDeviceStatePacket(uint8_t device_id, uint8_t payload_id,
     header.payload_id = id;
     header.payload_size_bytes = 4; // padded to 4 bytes
     header.sender_state = getSystemRequestState();
-    static std::atomic<uint8_t> g_seq{0};
-    header.seq = (g_seq++) % 16;
+    header.seq = getNextSeq();
     header.sender_timestamp_ms = 0;
 
     std::memcpy(packet.data(), &header, sizeof(EthernetHeader));
 
-    // Payload: copy 4 bytes (padded)
-    uint32_t val = state_val;
-    std::memcpy(packet.data() + sizeof(EthernetHeader), &val, sizeof(uint32_t));
+    // Payload: use SetStateFrame for SetState command, copy 4 bytes (padded)
+    uint8_t payload[4] = {0};
+    if (id == static_cast<uint8_t>(logic::communication::command::CommandType::SetState)) {
+        SetStateFrame frame;
+        frame.flags = 0;
+        frame.requestedID = static_cast<uint8_t>(state_val);
+        std::memcpy(payload, &frame, sizeof(SetStateFrame));
+    } else {
+        uint32_t val = state_val;
+        std::memcpy(payload, &val, sizeof(uint32_t));
+    }
+    std::memcpy(packet.data() + sizeof(EthernetHeader), payload, 4);
 
     // CRC-32 computed over EthernetHeader + padded Payload
     uint32_t crc = Crc32::calculate(packet.data(), sizeof(EthernetHeader) + 4);
     std::memcpy(packet.data() + sizeof(EthernetHeader) + 4, &crc, sizeof(uint32_t));
 
+    if (id == static_cast<uint8_t>(logic::communication::command::CommandType::SetState)) {
+        pending_cmd_.active = true;
+        pending_cmd_.seq = header.seq;
+        pending_cmd_.state_val = static_cast<uint8_t>(state_val);
+        pending_cmd_.last_sent = std::chrono::steady_clock::now();
+        pending_cmd_.acked = false;
+
+        enqueueClientSend(packet);
+    }
     enqueueServerSend(packet);
 }
 
 void GroundStation::enqueueClientSend(const std::vector<uint8_t>& data) {
+    if (data.size() >= sizeof(EthernetHeader)) {
+        EthernetHeader header;
+        std::memcpy(&header, data.data(), sizeof(EthernetHeader));
+        
+        if (header.payload_type == static_cast<uint8_t>(PayloadType::Command)) {
+            device_commands_sent_++;
+        }
+    }
     client_outgoing_queue_.push(data);
 }
 
@@ -353,7 +395,10 @@ void GroundStation::unsafeFire()
     if(!buttons_[ARM_IGNITER_BTN].is_pressed){
         unsafeState = UNSAFE_STATE_IDLE;
     }else if(buttons_[ARM_VALVE_BTN].is_pressed && buttons_[FIRE_IGNITER_BTN].is_pressed){
-        unsafeState = UNSAFE_STATE_VALVE;
+        if (engine_.getState() == static_cast<uint8_t>(logic::control::State::Ignite) &&
+            fill_.getState() == static_cast<uint8_t>(logic::control::State::Ignite)) {
+            unsafeState = UNSAFE_STATE_VALVE;
+        }
     }
 }
 
@@ -374,7 +419,6 @@ void GroundStation::unsafeFill()
 
 void GroundStation::handle_state_init() {
     // Stubs for actions to do at INIT state
-
     unsafeState = UNSAFE_STATE_IDLE;
 }
 
@@ -386,6 +430,7 @@ void GroundStation::handle_state_safe() {
 }
 
 void GroundStation::handle_state_unsafe() {
+    uint8_t prev = unsafeState;
     // Stubs for actions to do at UNSAFE state
     switch(unsafeState){
         case UNSAFE_STATE_IDLE:
@@ -400,7 +445,9 @@ void GroundStation::handle_state_unsafe() {
         case UNSAFE_STATE_VALVE:
             unsafeValve();
             break;
-        
+    }
+    if (unsafeState != prev) {
+        onUnsafeStateChanged(prev, unsafeState);
     }
 }
 
@@ -441,6 +488,18 @@ void GroundStation::processStateMachine(std::chrono::steady_clock::time_point& l
 
     updateFSM();
 
+
+
+    // Retry sending pending unsafe command every 100ms
+    if (pending_cmd_.active && !pending_cmd_.acked) {
+        auto now_steady = std::chrono::steady_clock::now();
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now_steady - pending_cmd_.last_sent).count();
+        if (elapsed_ms >= 100) {
+            transmitUnsafeCommand(pending_cmd_.state_val, pending_cmd_.seq);
+            pending_cmd_.last_sent = now_steady;
+        }
+    }
+
     // Increment device connection timeouts every 100ms
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_timer).count();
@@ -449,6 +508,7 @@ void GroundStation::processStateMachine(std::chrono::steady_clock::time_point& l
         last_fill_udp_ticks_++;
         last_server_udp_ticks_++;
         last_timer = now;
+        sendTelemetryPacket();
         triggerRedraw();
     }
 
@@ -465,8 +525,22 @@ void GroundStation::processStateMachine(std::chrono::steady_clock::time_point& l
             bool is_ack = (header.payload_type == static_cast<uint8_t>(PayloadType::Response)) &&
                           (header.payload_id == static_cast<uint8_t>(ResponseType::Ack));
 
+            if (is_ack) {
+                device_acks_received_++;
+            }
+
+            if (is_ack && pending_cmd_.active && header.seq == pending_cmd_.seq) {
+                pending_cmd_.acked = true;
+                std::string cmd_name = getStateName(pending_cmd_.state_val);
+                log("GS: Command " + cmd_name + " [seq=" + std::to_string(header.seq) + "] ACK received from device " + std::to_string(header.sender_id));
+            }
+
             if (header.sender_id == static_cast<uint8_t>(BoardId::Engine)) {
-                engine_.setState(state_val);
+                uint8_t old_state = engine_.getState();
+                if (old_state != state_val) {
+                    engine_.setState(state_val);
+                    log("GS: Engine Board state transitioned from " + getStateName(old_state) + " to " + getStateName(state_val));
+                }
                 resetEngineTimeout();
                 if (is_ack) {
                     log("GS: RX Engine Board State Sync (Ack): 0x" + std::to_string(state_val));
@@ -474,7 +548,11 @@ void GroundStation::processStateMachine(std::chrono::steady_clock::time_point& l
                     log("GS: RX Engine Board State Sync: 0x" + std::to_string(state_val));
                 }
             } else if (header.sender_id == static_cast<uint8_t>(BoardId::FillingStation)) {
-                fill_.setState(state_val);
+                uint8_t old_state = fill_.getState();
+                if (old_state != state_val) {
+                    fill_.setState(state_val);
+                    log("GS: Fill Station Board state transitioned from " + getStateName(old_state) + " to " + getStateName(state_val));
+                }
                 resetFillTimeout();
                 if (is_ack) {
                     log("GS: RX Fill Station Board State Sync (Ack): 0x" + std::to_string(state_val));
@@ -489,27 +567,47 @@ void GroundStation::processStateMachine(std::chrono::steady_clock::time_point& l
 
     std::vector<uint8_t> server_data;
     while (server_incoming_queue_.pop(server_data)) {
-        if (server_data.size() >= sizeof(EthernetHeader) + sizeof(GSSystemState)) {
+        if (server_data.size() >= sizeof(EthernetHeader)) {
             EthernetHeader header;
             std::memcpy(&header, server_data.data(), sizeof(EthernetHeader));
 
+            // 1. Handle SystemState Telemetry from remote server
             if (header.payload_type == static_cast<uint8_t>(PayloadType::Telemetry) &&
                 header.payload_id == static_cast<uint8_t>(TelemetryType::SystemState)) {
-                GSSystemState status;
-                std::memcpy(&status, server_data.data() + sizeof(EthernetHeader), sizeof(GSSystemState));
+                if (server_data.size() >= sizeof(EthernetHeader) + sizeof(GSSystemState)) {
+                    GSSystemState status;
+                    std::memcpy(&status, server_data.data() + sizeof(EthernetHeader), sizeof(GSSystemState));
 
-                fill_.setState(status.fcuState);
-                engine_.setState(status.ecuState);
-                resetFillTimeout();
-                resetEngineTimeout();
+                    uint8_t old_fill_state = fill_.getState();
+                    uint8_t old_engine_state = engine_.getState();
 
-                log("GS: RX GS System State from Computer: FCU 0x" + std::to_string(status.fcuState) + ", ECU 0x" + std::to_string(status.ecuState));
-                triggerRedraw();
+                    if (old_fill_state != status.fcuState) {
+                        fill_.setState(status.fcuState);
+                        log("GS: Fill Station Board state transitioned from " + getStateName(old_fill_state) + " to " + getStateName(status.fcuState));
+                    }
+                    if (old_engine_state != status.ecuState) {
+                        engine_.setState(status.ecuState);
+                        log("GS: Engine Board state transitioned from " + getStateName(old_engine_state) + " to " + getStateName(status.ecuState));
+                    }
+
+                    resetFillTimeout();
+                    resetEngineTimeout();
+                    resetServerDashboardTimeout();
+
+                    log("GS: RX GS System State from Computer: FCU 0x" + std::to_string(status.fcuState) + ", ECU 0x" + std::to_string(status.ecuState));
+                    triggerRedraw();
+                }
+            }else if(header.payload_type == static_cast<uint8_t>(PayloadType::Command) && header.payload_id == static_cast<uint8_t>(logic::communication::command::CommandType::SetValvePosition)){
+                if(static_cast<logic::control::State>(fill_.getState()) == logic::control::State::Unsafe){
+                    enqueueClientSend(server_data);
+                }else{
+                    log("GS: Fill station not in unsafe mode");
+                }
+                
+            }else if (header.payload_type == static_cast<uint8_t>(PayloadType::Command) && header.payload_id == static_cast<uint8_t>(logic::communication::command::CommandType::SetControlFlag)){
+                enqueueClientSend(server_data);
+                log("GS: Sent Control flags");
             }
-        }
-
-        if (canSendValve) {
-            client_outgoing_queue_.push(server_data);
         }
     }
 }
@@ -517,6 +615,11 @@ void GroundStation::processStateMachine(std::chrono::steady_clock::time_point& l
 void GroundStation::processSending() {
     std::vector<uint8_t> out_server_data;
     while (server_outgoing_queue_.pop(out_server_data)) {
+        if (out_server_data.size() >= sizeof(EthernetHeader) + sizeof(uint32_t)) {
+            size_t N = out_server_data.size();
+            uint32_t crc = Crc32::calculate(out_server_data.data(), N - sizeof(uint32_t));
+            std::memcpy(out_server_data.data() + N - sizeof(uint32_t), &crc, sizeof(uint32_t));
+        }
         if (client_.send(out_server_data)) {
             client_tx_packets_++;
             client_tx_bytes_ += out_server_data.size();
@@ -525,6 +628,11 @@ void GroundStation::processSending() {
 
     std::vector<uint8_t> out_client_data;
     while (client_outgoing_queue_.pop(out_client_data)) {
+        if (out_client_data.size() >= sizeof(EthernetHeader) + sizeof(uint32_t)) {
+            size_t N = out_client_data.size();
+            uint32_t crc = Crc32::calculate(out_client_data.data(), N - sizeof(uint32_t));
+            std::memcpy(out_client_data.data() + N - sizeof(uint32_t), &crc, sizeof(uint32_t));
+        }
         if (server_.send(out_client_data)) {
             server_tx_packets_++;
             server_tx_bytes_ += out_client_data.size();
@@ -534,19 +642,10 @@ void GroundStation::processSending() {
 
 void GroundStation::run() {
     auto last_timer = std::chrono::steady_clock::now();
-    auto last_telemetry_time = std::chrono::steady_clock::now();
     
     while (running_) {
         processReceiving();
         processStateMachine(last_timer);
-
-        // Periodically send telemetry packet (e.g. every 100ms)
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_telemetry_time).count() >= 100) {
-            sendTelemetryPacket();
-            last_telemetry_time = now;
-        }
-
         processSending();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -554,7 +653,7 @@ void GroundStation::run() {
 }
 
 void GroundStation::sendTelemetryPacket() {
-    // TODO: Create and send telemetry packet
+    sendGSStatusPacket();
 }
 
 
@@ -572,4 +671,97 @@ bool GroundStation::validateCrc(const std::vector<uint8_t>& data) const {
     std::memcpy(&received_crc, &data[N - 4], sizeof(uint32_t));
     
     return calculated_crc == received_crc;
+}
+
+uint8_t GroundStation::getNextSeq() {
+    uint8_t seq = seq_counter_.load();
+    uint8_t next_seq = (seq % 15) + 1; // 1 to 15
+    seq_counter_.store(next_seq);
+    return seq;
+}
+
+std::string GroundStation::getStateName(uint8_t state) {
+    switch (static_cast<logic::control::State>(state)) {
+        case logic::control::State::Init: return "INIT";
+        case logic::control::State::Safe: return "SAFE";
+        case logic::control::State::Unsafe: return "UNSAFE";
+        case logic::control::State::Abort: return "ABORT";
+        case logic::control::State::Error: return "ERROR";
+        case logic::control::State::Ignite: return "IGNITE";
+        case logic::control::State::Launch: return "LAUNCH";
+        case logic::control::State::Test: return "TEST";
+        default: return "UNKNOWN (" + std::to_string(state) + ")";
+    }
+}
+
+void GroundStation::sendUnsafeCommand(uint8_t requested_state) {
+    uint8_t seq = getNextSeq();
+
+    pending_cmd_.active = true;
+    pending_cmd_.seq = seq;
+    pending_cmd_.state_val = requested_state;
+    pending_cmd_.last_sent = std::chrono::steady_clock::now();
+    pending_cmd_.acked = false;
+
+    transmitUnsafeCommand(requested_state, seq);
+}
+
+void GroundStation::transmitUnsafeCommand(uint8_t requested_state, uint8_t seq) {
+    uint8_t type = static_cast<uint8_t>(PayloadType::Command);
+    uint8_t id = static_cast<uint8_t>(logic::communication::command::CommandType::SetState);
+    uint8_t target = static_cast<uint8_t>(BoardId::Broadcast);
+
+    std::vector<uint8_t> packet(sizeof(EthernetHeader) + 4 + sizeof(uint32_t));
+    EthernetHeader header;
+    std::memset(&header, 0, sizeof(header));
+    header.sender_id = static_cast<uint32_t>(BoardId::GsControl);
+    header.target_id = target;
+    header.payload_type = type;
+    header.payload_id = id;
+    header.payload_size_bytes = 4; // padded to 4 bytes
+    header.sender_state = getSystemRequestState();
+    header.seq = seq;
+    header.sender_timestamp_ms = 0;
+
+    std::memcpy(packet.data(), &header, sizeof(EthernetHeader));
+
+    // Payload: SetStateFrame: Byte 0: flags, Byte 1: requestedID, padded to 4 bytes
+    SetStateFrame frame;
+    frame.flags = 0;
+    frame.requestedID = requested_state;
+
+    uint8_t payload[4] = {0};
+    std::memcpy(payload, &frame, sizeof(SetStateFrame));
+    std::memcpy(packet.data() + sizeof(EthernetHeader), payload, 4);
+
+    // CRC-32 computed over EthernetHeader + padded Payload
+    uint32_t crc = Crc32::calculate(packet.data(), sizeof(EthernetHeader) + 4);
+    std::memcpy(packet.data() + sizeof(EthernetHeader) + 4, &crc, sizeof(uint32_t));
+
+    // Enqueue for sending to devices
+    enqueueClientSend(packet);
+
+    std::string cmd_name = getStateName(requested_state);
+    log("GS: Sent command " + cmd_name + " (0x" + std::to_string(requested_state) + ") to devices [seq=" + std::to_string(seq) + "]");
+}
+
+void GroundStation::clearPendingCommand() {
+    if (pending_cmd_.active) {
+        pending_cmd_.active = false;
+        pending_cmd_.seq = 0;
+        pending_cmd_.state_val = 0;
+        pending_cmd_.acked = false;
+        log("GS: Cleared pending command.");
+    }
+}
+
+void GroundStation::onUnsafeStateChanged(uint8_t prev, uint8_t current) {
+    (void)prev; // Unused parameter
+    if (current == UNSAFE_STATE_FIRE) {
+        sendUnsafeCommand(static_cast<uint8_t>(logic::control::State::Ignite));
+    } else if (current == UNSAFE_STATE_VALVE) {
+        sendUnsafeCommand(static_cast<uint8_t>(logic::control::State::Launch));
+    } else {
+        clearPendingCommand();
+    }
 }

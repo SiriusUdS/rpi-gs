@@ -108,6 +108,8 @@ public:
     uint32_t getClientTxPackets() const { return client_tx_packets_.load(); }
     uint64_t getClientRxBytes() const { return client_rx_bytes_.load(); }
     uint64_t getClientTxBytes() const { return client_tx_bytes_.load(); }
+    uint32_t getDeviceCommandsSent() const { return device_commands_sent_.load(); }
+    uint32_t getDeviceAcksReceived() const { return device_acks_received_.load(); }
     uint32_t getServerCrcErrors() const { return server_crc_errors_.load(); }
     uint32_t getClientCrcErrors() const { return client_crc_errors_.load(); }
     bool validateCrc(const std::vector<uint8_t>& data) const;
@@ -157,6 +159,8 @@ private:
     std::atomic<uint64_t> client_tx_bytes_;
     std::atomic<uint32_t> server_crc_errors_;
     std::atomic<uint32_t> client_crc_errors_;
+    std::atomic<uint32_t> device_commands_sent_;
+    std::atomic<uint32_t> device_acks_received_;
 
     // Background Threading
     std::thread worker_thread_;
@@ -176,4 +180,23 @@ private:
     void unsafeFire();
     void unsafeValve();
     void unsafeFill();
+
+    // Command sequence and ACK tracking for unsafe states
+    std::atomic<uint8_t> seq_counter_;
+
+    struct PendingCommand {
+        bool active = false;
+        uint8_t seq = 0;
+        uint8_t state_val = 0;
+        std::chrono::steady_clock::time_point last_sent;
+        bool acked = false;
+    };
+    PendingCommand pending_cmd_;
+
+    uint8_t getNextSeq();
+    std::string getStateName(uint8_t state);
+    void sendUnsafeCommand(uint8_t requested_state);
+    void transmitUnsafeCommand(uint8_t requested_state, uint8_t seq);
+    void clearPendingCommand();
+    void onUnsafeStateChanged(uint8_t prev, uint8_t current);
 };

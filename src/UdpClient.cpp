@@ -35,7 +35,9 @@ bool UdpClient::receive(UdpClientMessage& out_msg) {
     } else if (bytes_received < 0) {
         // EAGAIN or EWOULDBLOCK means no data is currently available
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            std::cerr << "UDP Client Receive error: " << strerror(errno) << std::endl;
+            if (log_callback_) {
+                log_callback_("UDP Client Receive error: " + std::string(strerror(errno)));
+            }
         }
     }
     
@@ -55,7 +57,9 @@ bool UdpClient::send(const std::vector<uint8_t>& data) {
             // OS send buffer is full, try again later
             return false;
         }
-        std::cerr << "UDP Client Send error: " << strerror(errno) << std::endl;
+        if (log_callback_) {
+            log_callback_("UDP Client Send error: " + std::string(strerror(errno)));
+        }
         return false;
     }
 

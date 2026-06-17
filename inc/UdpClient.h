@@ -4,6 +4,7 @@
 #include <mutex>
 #include <cstdint>
 #include <string>
+#include <functional>
 #include <netinet/in.h>
 
 typedef enum ClientStatus {
@@ -43,6 +44,9 @@ public:
 
     ClientStatus getStatus();
 
+    // Set callback for routing logs
+    void setLogCallback(std::function<void(const std::string&)> cb) { log_callback_ = cb; }
+
 private:
     std::string server_ip_;
     uint16_t server_port_;
@@ -51,6 +55,7 @@ private:
     std::mutex socket_mutex_; // Thread safety
     ClientStatus status_;
     struct sockaddr_in server_addr_;
+    std::function<void(const std::string&)> log_callback_;
 
     void initSocket();
     void closeSocket();

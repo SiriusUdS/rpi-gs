@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <atomic>
 #include <string>
+#include <functional>
 #include <netinet/in.h> // Required for struct sockaddr_in
 
 enum ServerStatus {
@@ -52,6 +53,9 @@ public:
     uint16_t getConnectedClientPort();
     void disconnectClient();
 
+    // Set callback for routing logs
+    void setLogCallback(std::function<void(const std::string&)> cb) { log_callback_ = cb; }
+
 private:
     uint16_t port_;
     int socket_fd_;
@@ -59,6 +63,7 @@ private:
     std::atomic<ServerStatus> status;
     std::atomic<bool> has_client_;
     struct sockaddr_in client_addr_;
+    std::function<void(const std::string&)> log_callback_;
 
     void initSocket();
     void closeSocket();

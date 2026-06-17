@@ -1,4 +1,5 @@
 #include "GpioReader.h"
+#include "config.h"
 #include <iostream>
 #include <chrono>
 #include <unistd.h>
@@ -18,7 +19,7 @@ void GpioReader::addPin(int pin) {
         if (p == pin) return;
     }
     monitored_pins.push_back(pin);
-    pin_states[pin] = 0; // Initial state: 0
+    pin_states[pin] = (pin == EMERGENCY_STOP_PIN) ? 1 : 0; // Initial state
 }
 
 int GpioReader::getPinValue(int pin) {
@@ -47,25 +48,30 @@ void GpioReader::start(int interval_ms) {
             auto builder = chip.prepare_request();
             builder.set_consumer("sirius-gs");
 
-            gpiod::line_settings settings;
-            settings.set_direction(gpiod::line::direction::INPUT)
-                    .set_bias(gpiod::line::bias::PULL_DOWN);
-
             for (int pin : monitored_pins) {
+                gpiod::line_settings settings;
+                settings.set_direction(gpiod::line::direction::INPUT);
+                if (pin == EMERGENCY_STOP_PIN) {
+                    settings.set_bias(gpiod::line::bias::DISABLED);
+                } else {
+                    settings.set_bias(gpiod::line::bias::PULL_DOWN);
+                }
                 builder.add_line_settings(pin, settings);
             }
 
             request_ = std::make_unique<gpiod::line_request>(builder.do_request());
         } catch (const std::exception& e) {
             setup_failed.store(true);
-            std::cerr << "GpioReader: Failed to initialize libgpiod: " << e.what() << std::endl;
+            if (log_callback_) {
+                log_callback_("GpioReader: Failed to initialize libgpiod: " + std::string(e.what()));
+            }
         }
     });
 
     std::lock_guard<std::mutex> lock(mutex_);
     for (int pin : monitored_pins) {
         if (!setup_failed.load()) {
-            pin_states[pin] = 0; // Initial state
+            pin_states[pin] = (pin == EMERGENCY_STOP_PIN) ? 1 : 0; // Initial state
         } else {
             pin_states[pin] = -2;
         }
@@ -97,7 +103,9 @@ void GpioReader::run() {
                     }
                 } catch (const std::exception& e) {
                     setup_failed.store(true);
-                    std::cerr << "GpioReader: Poll failed: " << e.what() << std::endl;
+                    if (log_callback_) {
+                        log_callback_("GpioReader: Poll failed: " + std::string(e.what()));
+                    }
                 }
             }
         }

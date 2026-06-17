@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <memory>
 #include <string>
+#include <functional>
 
 #ifdef USING_LIBGPIOD
 #include <gpiod.hpp>
@@ -95,6 +96,9 @@ public:
      */
     void stop();
 
+    // Set callback for routing logs
+    void setLogCallback(std::function<void(const std::string&)> cb) { log_callback_ = cb; }
+
 private:
     void run();
 
@@ -106,4 +110,5 @@ private:
     std::atomic<bool> setup_failed;
     int poll_interval_ms;
     std::unique_ptr<gpiod::line_request> request_;
+    std::function<void(const std::string&)> log_callback_;
 };
