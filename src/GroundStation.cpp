@@ -17,6 +17,7 @@
 #include "telemetry/gs_system_state.hpp"
 #include "command/command_type.hpp"
 #include "sirius-headers-common/GSControl/GSControlStatus.h"
+#include "system/valves/ecu.hpp"
 #include <cstring>
 #include <iostream>
 #include <chrono>
@@ -322,6 +323,8 @@ void GroundStation::onButtonStateChanged(int index, bool pressed) {
     } else {
         if (index == 7) { // UNSAFE_KEY released
             setSystemRequestState(static_cast<uint8_t>(logic::control::State::Safe));
+        }else if (index == 4){
+            setSystemRequestState(static_cast<uint8_t>(logic::control::State::Safe));
         }
     }
 
@@ -598,13 +601,29 @@ void GroundStation::processStateMachine(std::chrono::steady_clock::time_point& l
                     triggerRedraw();
                 }
             }else if(header.payload_type == static_cast<uint8_t>(PayloadType::Command) && header.payload_id == static_cast<uint8_t>(logic::communication::command::CommandType::SetValvePosition)){
-                if(static_cast<logic::control::State>(fill_.getState()) == logic::control::State::Unsafe){
+                SetValvePositionFrame valv;
+                std::memcpy(&valv, server_data.data()+ sizeof(EthernetHeader), sizeof(SetValvePositionFrame));
+                if(unsafeState == UNSAFE_STATE_FILL && buttons_[ALLOW_DUMP_BTN].is_pressed.load()){
+                    if(static_cast<logic::control::State>(fill_.getState()) == logic::control::State::Unsafe){
+                        if(static_cast<EcuValves>(valv.valve) == EcuValves::NOS || static_cast<EcuValves>(valv.valve) == EcuValves::IPA){
+                            enqueueClientSend(server_data);
+                        }
+                    }
+                }else if(static_cast<logic::control::State>(fill_.getState()) == logic::control::State::Unsafe && unsafeState == UNSAFE_STATE_FILL){
+                    if(valv.valve == FcuValves::Fill){
+                        enqueueClientSend(server_data);
+                    }else{
+                        log("GS: unknown valve");
+                    }
+                    continue;
+                }else if(static_cast<logic::control::State>(fill_.getState()) == logic::control::State::Unsafe && buttons_[ALLOW_DUMP_BTN].is_pressed.load() && valv.valve == FcuValves::Dump){
                     enqueueClientSend(server_data);
+                    log("GS: Dump sent");
                 }else{
-                    log("GS: Fill station not in unsafe mode");
+                    log("GS: Fill station not in unsafe mode or allowing fill not allowed");
                 }
                 
-            }else if (header.payload_type == static_cast<uint8_t>(PayloadType::Command) && header.payload_id == static_cast<uint8_t>(logic::communication::command::CommandType::SetControlFlag)){
+            }else if (header.payload_type == static_cast<uint8_t>(PayloadType::Command) && (header.payload_id == static_cast<uint8_t>(logic::communication::command::CommandType::SetControlFlag) || header.payload_id == static_cast<uint8_t>(logic::communication::command::CommandType::Ping))){
                 enqueueClientSend(server_data);
                 log("GS: Sent Control flags");
             }
